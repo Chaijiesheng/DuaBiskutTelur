@@ -1,0 +1,47 @@
+name: CI
+
+# Push builds run on main (PR branches are already covered by the
+# pull_request trigger — running both would just double every check).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (Java 17, Maven)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      # No secrets needed: tests provide their own OAuth/Gemini stub config,
+      # and application.yml boots with placeholder OAuth defaults.
+      - name: Run tests
+        run: mvn -B test
+
+  frontend:
+    name: Frontend (Node 20, Vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Check i18n dictionary parity
+        run: node scripts/check-i18n-parity.mjs
+      - name: Production build
+        run: npm run build

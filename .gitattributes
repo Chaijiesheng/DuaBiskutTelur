@@ -1,0 +1,10 @@
+# Normalize line endings so Windows/macOS/Linux contributors don't fight over CRLF.
+* text=auto
+
+# Shell scripts must stay LF — they run on the Linux VM and in Linux containers.
+*.sh text eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.jar binary

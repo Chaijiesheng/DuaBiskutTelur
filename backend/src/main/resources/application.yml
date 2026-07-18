@@ -1,0 +1,101 @@
+server:
+  port: 8080
+  # The app runs behind a TLS-terminating proxy chain (CDN -> host nginx ->
+  # container nginx -> here, plain HTTP at the origin). Honour
+  # X-Forwarded-Proto/Host so OAuth2 redirect URIs come out as
+  # https://<your-domain>/... (matching the Google console config)
+  # and the session cookie is marked Secure. Must be `native`, not `framework`:
+  # framework's ForwardedHeaderFilter only overrides isSecure() for servlet/
+  # controller code — Tomcat's own session-cookie creation reads the raw
+  # connector-level request state and never sees that override, so the
+  # Secure flag silently never got set under `framework` (caught by
+  # SecurityConfigTest). `native` configures Tomcat's RemoteIpValve instead,
+  # which patches the request at the connector level before Tomcat's own
+  # session/cookie logic runs.
+  forward-headers-strategy: native
+  servlet:
+    session:
+      cookie:
+        same-site: lax
+        http-only: true
+
+spring:
+  application:
+    name: duabiskuttelur
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+  datasource:
+    url: jdbc:h2:file:./data/duabiskuttelur;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      # Flyway (below) owns schema changes now — validate just checks the
+      # entity mappings agree with what the migrations produced, so a missing
+      # migration fails fast at startup instead of Hibernate silently patching
+      # the schema.
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    # The V1 baseline documents the schema as it existed under the old
+    # ddl-auto:update — on the live DB (which already has those tables)
+    # baseline-on-migrate marks V1 as already-applied instead of running it,
+    # then later migrations apply normally. A fresh/empty database (new dev
+    # machine, rebuilt VM) just runs V1 then everything after it.
+    baseline-on-migrate: true
+    baseline-version: 1
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            # The placeholder default lets the app boot with no OAuth env vars
+            # (mock mode for local UI dev, as .env.example documents) — Boot
+            # refuses to start on an *empty* client-id. Sign-in just fails at
+            # Google until real credentials are set; DuaBiskutTelurApplication
+            # logs a startup warning whenever the placeholder is active.
+            client-id: ${GOOGLE_CLIENT_ID:local-dev-placeholder}
+            client-secret: ${GOOGLE_CLIENT_SECRET:local-dev-placeholder}
+            scope:
+              - openid
+              - email
+              - profile
+
+app:
+  # Ordered primary-first: GEMINI_API_KEY is tried first, then the backups on
+  # rate limit. Blank entries (unset env vars) are ignored automatically.
+  gemini-api-keys:
+    - ${GEMINI_API_KEY:}
+    - ${GEMINI_API_KEY_2:}
+    - ${GEMINI_API_KEY_3:}
+  # Preferred model first; the rest are fallbacks used when Google reports the
+  # model is overloaded (HTTP 5xx "experiencing high demand").
+  gemini-vision-models:
+    - gemini-flash-latest
+    - gemini-2.5-flash
+    - gemini-2.0-flash
+  gemini-feedback-models:
+    - gemini-flash-lite-latest
+    - gemini-2.5-flash-lite
+    - gemini-2.0-flash-lite
+  # Only the Vite dev server needs a CORS entry — production serves the
+  # frontend same-origin behind nginx. Extend (comma-separated) only if the
+  # frontend is ever hosted on a different origin than the API.
+  cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  usda-api-key: ${USDA_API_KEY:}
+  open-food-facts-base-url: https://world.openfoodfacts.org
+  connect-timeout-ms: 10000
+  # Per-call cap. Flash models answer in well under 30s; a hung call must fail
+  # fast so the fallback models get a chance within the gateway time budget.
+  read-timeout-ms: 30000
+  usda-retries: 2
+
+# Scoring engine thresholds — every value here is tunable (see ScoringProperties)
+scoring:
+  daily-calorie-budget: 2000
+  fiber-bonus-threshold-grams: 8
+  sugar-penalty-threshold-grams: 25
+  sodium-penalty-threshold-mg: 800

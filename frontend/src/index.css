@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .input {
+    @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100;
+  }
+}
+
+@keyframes stamp-in {
+  0% {
+    transform: scale(3) rotate(-12deg);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(0.9) rotate(2deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+/* Outside this query .animate-stamp applies no animation, so the element just
+   renders at its natural (final) styling immediately — no opacity-0 flash. */
+@media (prefers-reduced-motion: no-preference) {
+  .animate-stamp {
+    animation: stamp-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+  }
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.duabiskuttelur.app",
+      "sha256_cert_fingerprints": [
+        "3E:C0:CA:49:23:36:DD:40:4F:B3:B4:9D:19:7E:8B:C9:CE:04:10:0A:20:BB:08:FB:2B:92:70:D6:E8:52:ED:7C"
+      ]
+    }
+  }
+]
