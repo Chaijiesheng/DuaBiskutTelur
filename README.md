@@ -32,8 +32,22 @@ Installable as a mobile-first PWA, with an Android Trusted Web Activity wrapper.
 
 ## Screenshots
 
-<!-- TODO: add screenshots/GIFs (capture screen, grade reveal, history, dark mode) -->
-*Screenshots coming soon.*
+<p align="center">
+  <img src="docs/screenshots/demo.gif" alt="Snapping a meal, watching it get graded, then checking history" width="300">
+</p>
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/snap-light.png" width="200"><br><sub>Snap a meal</sub></td>
+    <td align="center"><img src="docs/screenshots/results-light.png" width="200"><br><sub>Grading + feedback</sub></td>
+    <td align="center"><img src="docs/screenshots/history-light.png" width="200"><br><sub>History</sub></td>
+    <td align="center"><img src="docs/screenshots/dashboard-light.png" width="200"><br><sub>Analysis dashboard</sub></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><img src="docs/screenshots/snap-dark.png" width="200"><br><sub>Dark mode</sub></td>
+    <td align="center" colspan="2"><img src="docs/screenshots/history-dark.png" width="200"><br><sub>Dark mode</sub></td>
+  </tr>
+</table>
 
 ## How it works
 
