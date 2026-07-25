@@ -4,6 +4,7 @@ import TodaySummaryCard from './components/TodaySummaryCard.jsx'
 import BarcodeScanScreen from './components/BarcodeScanScreen.jsx'
 import AnalyzingScreen from './components/AnalyzingScreen.jsx'
 import ResultsScreen from './components/ResultsScreen.jsx'
+import MenuResultsScreen from './components/MenuResultsScreen.jsx'
 import HistoryScreen from './components/HistoryScreen.jsx'
 import AnalysisScreen from './components/AnalysisScreen.jsx'
 import ProfilePage from './components/ProfilePage.jsx'
@@ -17,13 +18,14 @@ import EmptyDashboardModal from './components/EmptyDashboardModal.jsx'
 import {
   analyzeImage,
   lookupBarcode as lookupBarcodeApi,
+  rankMenuImage,
   fetchMe,
   fetchDashboardToday,
   saveProfile as saveProfileApi,
   saveBudget as saveBudgetApi,
   logout as logoutApi,
 } from './api.js'
-import { compressImage } from './imageUtils.js'
+import { compressImage, compressMenuImage } from './imageUtils.js'
 import { calculateDailyBudget } from './calorieCalculator.js'
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext.jsx'
 import { ThemeProvider } from './theme/ThemeContext.jsx'
@@ -59,9 +61,11 @@ function AppShell() {
   const [tab, setTab] = useState('snap')
   const [phase, setPhase] = useState('capture')
   const [result, setResult] = useState(null)
+  const [menuResult, setMenuResult] = useState(null)
   const [error, setError] = useState(null)
   const [lastFile, setLastFile] = useState(null)
   const [lastBarcodeArgs, setLastBarcodeArgs] = useState(null)
+  const [lastMenuFile, setLastMenuFile] = useState(null)
   const [online, setOnline] = useState(navigator.onLine)
   const [installEvent, setInstallEvent] = useState(null)
   const [showInstall, setShowInstall] = useState(false)
@@ -304,6 +308,7 @@ function AppShell() {
       const seq = ++requestSeqRef.current
       setLastFile(file)
       setLastBarcodeArgs(null)
+      setLastMenuFile(null)
       setPhase('analyzing')
       setError(null)
       try {
@@ -325,6 +330,7 @@ function AppShell() {
       const seq = ++requestSeqRef.current
       setLastFile(null)
       setLastBarcodeArgs({ code, servings })
+      setLastMenuFile(null)
       setPhase('analyzing')
       setError(null)
       try {
@@ -340,9 +346,44 @@ function AppShell() {
     [lang, handleAnalysisSuccess],
   )
 
+  // Ranking a menu is deliberately NOT routed through handleAnalysisSuccess:
+  // it isn't a meal that was eaten, so it never touches the dashboard, the
+  // visitor in-session history, or the first-run interstitial queue.
+  const rankMenu = useCallback(
+    async (file) => {
+      const seq = ++requestSeqRef.current
+      setLastFile(null)
+      setLastBarcodeArgs(null)
+      setLastMenuFile(file)
+      setPhase('analyzing')
+      setError(null)
+      try {
+        const compressed = await compressMenuImage(file)
+        const ranking = await rankMenuImage(compressed, 'menu.jpg', lang)
+        if (seq !== requestSeqRef.current) return
+        // Same distinction ResultsScreen relies on: persisted:false means
+        // "not saved" for BOTH a plain never-signed-in visitor and a session
+        // that expired mid-request — only the latter deserves the "your
+        // sign-in expired" banner.
+        const expired = isAuthed && ranking.persisted === false
+        setSessionExpired(expired)
+        if (expired) setUser(null)
+        setMenuResult(ranking)
+        setPhase('menuResults')
+      } catch (e) {
+        if (seq !== requestSeqRef.current) return
+        setError(e)
+        setPhase('error')
+      }
+    },
+    [lang, isAuthed],
+  )
+
   const retry = () => {
     if (lastFile) {
       analyze(lastFile)
+    } else if (lastMenuFile) {
+      rankMenu(lastMenuFile)
     } else if (lastBarcodeArgs) {
       // A failed barcode is usually a miss, not a transient error — go back
       // to the scanner rather than replaying the same code.
@@ -419,14 +460,21 @@ function AppShell() {
             onLogout={doLogout}
           />
         ) : phase === 'analyzing' ? (
-          <AnalyzingScreen />
+          <AnalyzingScreen titleKey={lastMenuFile ? 'analyzing.titleMenu' : 'analyzing.title'} />
         ) : phase === 'results' && result ? (
           <ResultsScreen
             result={result}
             dailyBudget={dailyBudget}
             goal={profileForm?.goal}
             onSnapAnother={() => setPhase('capture')}
+            shareImageSource={lastFile}
             banner={sessionExpired ? t('results.sessionExpired') : undefined}
+          />
+        ) : phase === 'menuResults' && menuResult ? (
+          <MenuResultsScreen
+            result={menuResult}
+            onScanAnother={() => setPhase('capture')}
+            banner={sessionExpired ? t('menuResults.notSaved') : undefined}
           />
         ) : phase === 'error' ? (
           <ErrorScreen error={error} onRetry={retry} onBack={() => setPhase('capture')} />
@@ -445,7 +493,12 @@ function AppShell() {
               dailyBudget={dailyBudget}
               profile={profileForm}
             />
-            <CaptureScreen online={online} onPhoto={analyze} onScanBarcode={() => setPhase('barcode')} />
+            <CaptureScreen
+              online={online}
+              onPhoto={analyze}
+              onScanBarcode={() => setPhase('barcode')}
+              onScanMenu={rankMenu}
+            />
           </>
         )}
       </main>

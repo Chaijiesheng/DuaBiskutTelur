@@ -1,6 +1,13 @@
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 
-const EMOJI = { NO_FOOD_DETECTED: '🔍', ANALYZER_BUSY: '⏳', NETWORK: '📡', BARCODE_NOT_FOUND: '🔖', DEFAULT: '😅' }
+const EMOJI = {
+  NO_FOOD_DETECTED: '🔍',
+  ANALYZER_BUSY: '⏳',
+  NETWORK: '📡',
+  BARCODE_NOT_FOUND: '🔖',
+  NO_DISHES_DETECTED: '📋',
+  DEFAULT: '😅',
+}
 
 export default function ErrorScreen({ error, onRetry, onBack }) {
   const { t } = useLanguage()

@@ -33,9 +33,10 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/oauth2/**", "/login/**").permitAll()
-                        // Visitors (not signed in) can still analyze a meal or scan a barcode.
+                        // Visitors (not signed in) can still analyze a meal, scan a barcode, or rank a menu.
                         .requestMatchers(HttpMethod.POST, "/api/analyze").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/barcode/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/menu/rank").permitAll()
                         // History, profile and identity are per-user, so require login.
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().permitAll())
@@ -46,7 +47,9 @@ public class SecurityConfig {
                 .logout(logout -> logout
                         .logoutUrl("/api/logout")
                         .logoutSuccessHandler((req, res, auth) -> res.setStatus(HttpServletResponse.SC_OK))
-                        .deleteCookies("JSESSIONID")
+                        // Spring Session (spring.session.store-type=jdbc) issues a "SESSION"
+                        // cookie, not the container's native JSESSIONID.
+                        .deleteCookies("SESSION")
                         .invalidateHttpSession(true))
                 // Unauthenticated API calls get a plain 401 (so the SPA shows the login
                 // screen) instead of a redirect to Google.

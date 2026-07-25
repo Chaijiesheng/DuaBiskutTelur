@@ -16,6 +16,19 @@ export default {
           c: '#b45309',
           d: '#b91c1c',
         },
+        // Menu tier-list meme labels (夯/顶级/人上人/NPC/拉完了) — deliberately a
+        // SEPARATE palette from grade.* above, not a reuse of its green=good/
+        // red=bad semantics. Red is the *best* tier here, which would be
+        // actively confusing if it shared grade.d's meaning. Keep in sync with
+        // TIER_COLORS in frontend/src/tierMeta.js the same way grade.* is kept
+        // in sync with GRADE_COLORS in GradeReveal.jsx.
+        tier: {
+          hang: '#b91c1c',        // 夯
+          top: '#b45309',         // 顶级
+          renshangren: '#a16207', // 人上人 (same yellow family as top, darker shade)
+          npc: '#4b5563',         // NPC
+          lawanle: '#374151',     // 拉完了 (darker gray, distinguishable from npc)
+        },
       },
       keyframes: {
         chopstickFloat: {

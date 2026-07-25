@@ -10,7 +10,7 @@ function pickInsight(count, excludeIndex) {
   return next
 }
 
-export default function AnalyzingScreen() {
+export default function AnalyzingScreen({ titleKey = 'analyzing.title' }) {
   const { t } = useLanguage()
   const insights = t('analyzing.insights')
   const [index, setIndex] = useState(() => Math.floor(Math.random() * insights.length))
@@ -32,7 +32,7 @@ export default function AnalyzingScreen() {
 
   return (
     <div className="flex flex-col items-center gap-6 pt-16">
-      <p className="text-sm text-slate-500 dark:text-slate-400">{t('analyzing.title')}…</p>
+      <p className="text-sm text-slate-500 dark:text-slate-400">{t(titleKey)}…</p>
 
       <div className="relative flex h-28 w-28 items-center justify-center">
         <div className="absolute h-full w-full rounded-full bg-grade-aplus/10 motion-safe:animate-soft-pulse" />
@@ -43,7 +43,7 @@ export default function AnalyzingScreen() {
         <button
           type="button"
           onClick={handleTap}
-          aria-label={t('analyzing.title')}
+          aria-label={t(titleKey)}
           className={`select-none border-0 bg-transparent p-0 text-5xl leading-none [-webkit-tap-highlight-color:transparent] ${
             tapping ? 'motion-safe:animate-chopstick-tap' : 'motion-safe:animate-chopstick-float'
           }`}

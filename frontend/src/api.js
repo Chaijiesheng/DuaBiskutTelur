@@ -91,6 +91,48 @@ export async function analyzeImage(blob, filename = 'meal.jpg', lang = 'en') {
   return response.json()
 }
 
+/** POST a menu photo; returns a MenuRankingResponse (5 tier groups, not a single score). */
+export async function rankMenuImage(blob, filename = 'menu.jpg', lang = 'en') {
+  const form = new FormData()
+  form.append('image', blob, filename)
+  form.append('lang', lang)
+  let response
+  try {
+    response = await apiFetch('/api/menu/rank', { method: 'POST', body: form })
+  } catch {
+    throw new ApiError('NETWORK', 'Could not reach the analyzer.')
+  }
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json()
+}
+
+export async function fetchMenuHistory() {
+  const response = await apiFetch('/api/menu/history')
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json()
+}
+
+/** Reopens a past menu scan; returns the full MenuRankingResponse. */
+export async function fetchMenuHistoryDetail(id) {
+  const response = await apiFetch(`/api/menu/history/${id}`)
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json()
+}
+
+/** Permanently deletes a saved menu scan. */
+export async function deleteMenuHistoryEntry(id) {
+  const response = await apiFetch(`/api/menu/history/${id}`, { method: 'DELETE' })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+}
+
 /** Resolves just the product name/unit basis for a scanned barcode — no scoring, no history write. */
 export async function lookupBarcodeProduct(code) {
   let response

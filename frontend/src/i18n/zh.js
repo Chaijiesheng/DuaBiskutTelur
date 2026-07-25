@@ -21,6 +21,8 @@ export default {
     fromGallery: '从相册选择',
     scanBarcode: '扫描条码',
     scanBarcodeHint: '精确的标签数据',
+    scanMenu: '扫描菜单',
+    scanMenuHint: '为每道菜排名',
     cancel: '取消',
   },
   barcodeScan: {
@@ -37,6 +39,7 @@ export default {
   },
   analyzing: {
     title: '正在分析你的餐点',
+    titleMenu: '正在读取菜单',
     insights: [
       '🥕 胡萝卜最初是紫色、黄色和白色的，橙色品种后来才流行起来。',
       '🍫 可可含量高的黑巧克力含有抗氧化物质，或有助于心脏健康。',
@@ -107,6 +110,10 @@ export default {
       title: '找不到该产品',
       body: '我们的数据库中暂时没有这个条码。请再试一次，或改为拍照。',
     },
+    NO_DISHES_DETECTED: {
+      title: '未检测到菜品',
+      body: '我们无法从这张菜单中读取任何菜品。请尝试拍摄更清晰、更平整、光线更好的照片。',
+    },
     DEFAULT: {
       title: '出了点问题',
       body: '这次没有成功 — 也许照片太模糊，或服务出现了小故障，请再试一次。',
@@ -130,10 +137,25 @@ export default {
     exportPdf: '📄 导出 PDF',
     preparingPdf: '正在生成 PDF…',
     exportError: '导出报告失败，请重试。',
+    share: '📤 分享',
+    preparingShare: '正在生成图片…',
+    shareError: '分享失败，请重试。',
+    shareText: (grade) => `我这一餐得了 ${grade}！🥚 DuaBiskutTelur`,
     outOf: '/ 100',
     verifiedFromBarcode: '来自条码验证',
     scoreAnnouncement: (score, grade) => `得分 ${score}／100，评级 ${grade}`,
     sessionExpired: '登录已过期，这一餐没有保存到你的账户。本次会话仍会保留 — 重新登录后即可继续保存。',
+  },
+  menuResults: {
+    dishCount: (n) => `已为 ${n} 道菜排名`,
+    truncatedNotice: '仅显示前 60 道菜 — 如需完整菜单，请分区域拍摄。',
+    emptyTier: '暂无菜品落在此等级',
+    scanAnother: '扫描下一份菜单',
+    notSaved: '登录已过期，这次扫描没有保存。重新登录后即可继续保存菜单。',
+    howTiersWork: {
+      title: '等级如何评定',
+      body: '每道菜的评分方式与已记录的一餐相同——营养均衡、营养质量、分量与多样性——再据此归入相应等级。',
+    },
   },
   scoringRubric: {
     title: '评分方式说明',
@@ -190,6 +212,11 @@ export default {
     delete: '删除',
     verifiedFromBarcode: '来自条码验证',
     visitorEphemeralNotice: '🔒 登录以保留这些记录 — 目前刷新或关闭应用后它们将会消失',
+    mealsTab: '餐点',
+    menusTab: '菜单',
+    menusVisitorNotice: '🔒 登录以保存并回顾你扫描过的菜单',
+    emptyMenus: '还没有扫描过菜单 — 扫描一份来为菜品排名吧。',
+    dishesCount: (n) => `${n} 道菜`,
   },
   analysis: {
     couldntLoad: '暂时无法加载分析数据 — 请检查网络连接。',

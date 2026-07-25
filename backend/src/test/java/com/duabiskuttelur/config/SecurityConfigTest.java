@@ -38,8 +38,8 @@ class SecurityConfigTest {
     void sessionCookieIsSameSiteLaxHttpOnlyAndSecureBehindTls() throws Exception {
         // Hitting the OAuth2 authorization endpoint stores the pending
         // authorization request in the session before redirecting to Google —
-        // that's enough to make the container issue a JSESSIONID cookie
-        // without needing real Google credentials or a completed login.
+        // that's enough to make Spring Session issue a session cookie without
+        // needing real Google credentials or a completed login.
         // Redirects are followed manually (NEVER here) so we inspect our own
         // server's first response, not wherever the 3xx points afterward.
         // X-Forwarded-Proto: https simulates what Cloudflare/nginx actually
@@ -55,15 +55,17 @@ class SecurityConfigTest {
         HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
 
         List<String> setCookie = response.headers().allValues("Set-Cookie");
-        String jsessionCookie = setCookie.stream()
-                .filter(c -> c.toUpperCase().startsWith("JSESSIONID"))
+        // Spring Session (spring.session.store-type=jdbc) issues its own
+        // "SESSION" cookie instead of the container's native JSESSIONID.
+        String sessionCookie = setCookie.stream()
+                .filter(c -> c.toUpperCase().startsWith("SESSION="))
                 .findFirst()
                 .orElse(null);
-        assertNotNull(jsessionCookie, "expected a JSESSIONID cookie: " + setCookie);
+        assertNotNull(sessionCookie, "expected a SESSION cookie: " + setCookie);
 
-        String lower = jsessionCookie.toLowerCase();
-        assertTrue(lower.contains("httponly"), "missing HttpOnly: " + jsessionCookie);
-        assertTrue(lower.contains("samesite=lax"), "missing SameSite=Lax: " + jsessionCookie);
-        assertTrue(lower.contains("secure"), "missing Secure: " + jsessionCookie);
+        String lower = sessionCookie.toLowerCase();
+        assertTrue(lower.contains("httponly"), "missing HttpOnly: " + sessionCookie);
+        assertTrue(lower.contains("samesite=lax"), "missing SameSite=Lax: " + sessionCookie);
+        assertTrue(lower.contains("secure"), "missing Secure: " + sessionCookie);
     }
 }

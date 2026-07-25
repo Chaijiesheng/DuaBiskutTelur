@@ -1,0 +1,20 @@
+package com.duabiskuttelur.model;
+
+import java.util.List;
+
+public record MenuRankingResponse(
+        // Always exactly 5 groups, best-to-worst, even when a tier has no dishes in
+        // it — the frontend renders all 5 rows every time, matching the reference
+        // tier-list format regardless of how the menu happened to score.
+        List<TierGroup> tiers,
+        int dishCount,
+        boolean truncated,
+        // Same semantics as AnalysisResponse.persisted: false for anonymous visitors
+        // or an expired session, so the frontend can show a "sign in to save this"
+        // banner right after a scan.
+        boolean persisted
+) {
+    /** label is the literal tier string (e.g. "夯"), kept in sync with frontend/src/tierMeta.js. */
+    public record TierGroup(String tier, String label, List<MenuDish> dishes) {
+    }
+}

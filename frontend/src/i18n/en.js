@@ -21,6 +21,8 @@ export default {
     fromGallery: 'From gallery',
     scanBarcode: 'Scan barcode',
     scanBarcodeHint: 'Exact label data',
+    scanMenu: 'Scan menu',
+    scanMenuHint: 'Rank every dish',
     cancel: 'Cancel',
   },
   barcodeScan: {
@@ -37,6 +39,7 @@ export default {
   },
   analyzing: {
     title: 'Analyzing your meal',
+    titleMenu: 'Reading your menu',
     insights: [
       '🥕 Carrots were originally purple, yellow, and white before the orange varieties became popular.',
       '🍫 Dark chocolate with high cocoa content contains antioxidants that may support heart health.',
@@ -107,6 +110,10 @@ export default {
       title: "Couldn't find that product",
       body: "We don't have that barcode in our database yet. Try scanning again, or take a photo instead.",
     },
+    NO_DISHES_DETECTED: {
+      title: 'No dishes spotted',
+      body: "We couldn't read any dishes on that menu. Try a clearer, flatter shot with good lighting.",
+    },
     DEFAULT: {
       title: 'Something went wrong',
       body: "That didn't work — maybe the photo was too blurry, or the service hiccuped. Give it another go.",
@@ -130,11 +137,26 @@ export default {
     exportPdf: '📄 Export PDF',
     preparingPdf: 'Preparing PDF…',
     exportError: "Couldn't export the report — try again.",
+    share: '📤 Share',
+    preparingShare: 'Preparing image…',
+    shareError: "Couldn't share this report — try again.",
+    shareText: (grade) => `I scored ${grade} on my meal! 🥚 DuaBiskutTelur`,
     outOf: '/ 100',
     verifiedFromBarcode: 'Verified from barcode',
     scoreAnnouncement: (score, grade) => `Score ${score} out of 100 — grade ${grade}`,
     sessionExpired:
       "Your sign-in expired, so this meal wasn't saved to your account. It's kept for this session — sign in again to keep saving meals.",
+  },
+  menuResults: {
+    dishCount: (n) => `${n} dish${n === 1 ? '' : 'es'} ranked`,
+    truncatedNotice: 'Showing the first 60 dishes — try a section at a time for a full menu.',
+    emptyTier: 'No dishes landed here',
+    scanAnother: 'Scan another menu',
+    notSaved: "Your sign-in expired, so this scan wasn't saved. Sign in again to keep saving menus.",
+    howTiersWork: {
+      title: 'How tiers work',
+      body: 'Each dish is scored the same way as a logged meal — balance, nutrient quality, portion, and variety — then mapped onto a tier.',
+    },
   },
   scoringRubric: {
     title: 'How grading works',
@@ -191,6 +213,11 @@ export default {
     delete: 'Delete',
     verifiedFromBarcode: 'Verified from barcode',
     visitorEphemeralNotice: "🔒 Sign in to keep these meals — right now they'll disappear if you refresh or close the app",
+    mealsTab: 'Meals',
+    menusTab: 'Menus',
+    menusVisitorNotice: '🔒 Sign in to save and revisit menus you scan',
+    emptyMenus: 'No menus scanned yet — scan one to rank its dishes.',
+    dishesCount: (n) => `${n} dish${n === 1 ? '' : 'es'}`,
   },
   analysis: {
     couldntLoad: "Couldn't load your analytics right now — check your connection.",

@@ -21,6 +21,8 @@ export default {
     fromGallery: 'Dari galeri',
     scanBarcode: 'Imbas kod bar',
     scanBarcodeHint: 'Data label yang tepat',
+    scanMenu: 'Imbas menu',
+    scanMenuHint: 'Susun setiap hidangan',
     cancel: 'Batal',
   },
   barcodeScan: {
@@ -37,6 +39,7 @@ export default {
   },
   analyzing: {
     title: 'Menganalisis makanan anda',
+    titleMenu: 'Membaca menu anda',
     insights: [
       '🥕 Lobak merah pada asalnya berwarna ungu, kuning dan putih sebelum varieti oren menjadi popular.',
       '🍫 Coklat gelap dengan kandungan koko yang tinggi mengandungi antioksidan yang mungkin menyokong kesihatan jantung.',
@@ -107,6 +110,10 @@ export default {
       title: 'Tidak jumpa produk itu',
       body: 'Kami belum ada kod bar itu dalam pangkalan data kami. Cuba imbas semula, atau ambil gambar sebaliknya.',
     },
+    NO_DISHES_DETECTED: {
+      title: 'Tiada hidangan dikesan',
+      body: 'Kami tidak dapat membaca sebarang hidangan pada menu itu. Cuba ambil gambar yang lebih jelas dan rata dengan pencahayaan yang baik.',
+    },
     DEFAULT: {
       title: 'Sesuatu tidak kena',
       body: 'Itu tidak berjaya — mungkin gambar terlalu kabur, atau perkhidmatan mengalami masalah kecil. Cuba lagi.',
@@ -130,11 +137,26 @@ export default {
     exportPdf: '📄 Eksport PDF',
     preparingPdf: 'Menyediakan PDF…',
     exportError: 'Gagal mengeksport laporan — cuba lagi.',
+    share: '📤 Kongsi',
+    preparingShare: 'Menyediakan imej…',
+    shareError: 'Gagal berkongsi laporan ini — cuba lagi.',
+    shareText: (grade) => `Saya mendapat gred ${grade} untuk hidangan saya! 🥚 DuaBiskutTelur`,
     outOf: '/ 100',
     verifiedFromBarcode: 'Disahkan melalui kod bar',
     scoreAnnouncement: (score, grade) => `Skor ${score} daripada 100 — gred ${grade}`,
     sessionExpired:
       'Log masuk anda telah tamat tempoh, jadi hidangan ini tidak disimpan ke akaun anda. Ia kekal untuk sesi ini — log masuk semula untuk terus menyimpan hidangan.',
+  },
+  menuResults: {
+    dishCount: (n) => `${n} hidangan disusun`,
+    truncatedNotice: 'Menunjukkan 60 hidangan pertama — cuba imbas satu bahagian pada satu masa untuk menu penuh.',
+    emptyTier: 'Tiada hidangan di tahap ini',
+    scanAnother: 'Imbas menu lain',
+    notSaved: 'Log masuk anda telah tamat tempoh, jadi imbasan ini tidak disimpan. Log masuk semula untuk terus menyimpan menu.',
+    howTiersWork: {
+      title: 'Cara tahap berfungsi',
+      body: 'Setiap hidangan dinilai dengan cara yang sama seperti makanan yang direkodkan — keseimbangan, kualiti nutrien, saiz hidangan dan kepelbagaian — kemudian dipetakan ke tahap tertentu.',
+    },
   },
   scoringRubric: {
     title: 'Cara penggredan berfungsi',
@@ -191,6 +213,11 @@ export default {
     delete: 'Padam',
     verifiedFromBarcode: 'Disahkan melalui kod bar',
     visitorEphemeralNotice: '🔒 Log masuk untuk menyimpan hidangan ini — buat masa ini ia akan hilang jika anda muat semula atau tutup apl',
+    mealsTab: 'Makanan',
+    menusTab: 'Menu',
+    menusVisitorNotice: '🔒 Log masuk untuk menyimpan dan menyemak semula menu yang anda imbas',
+    emptyMenus: 'Belum ada menu diimbas lagi — imbas satu untuk menyusun hidangannya.',
+    dishesCount: (n) => `${n} hidangan`,
   },
   analysis: {
     couldntLoad: 'Gagal memuatkan analitik anda sekarang — semak sambungan anda.',

@@ -12,4 +12,7 @@ import java.util.List;
 public interface VisionAnalysisClient {
 
     List<IdentifiedFood> identifyFoods(byte[] imageBytes, String mediaType);
+
+    /** Reads a restaurant/cafe menu photo (a list of dishes, not a plated meal) and returns one entry per distinct dish. */
+    List<IdentifiedFood> identifyMenuDishes(byte[] imageBytes, String mediaType);
 }

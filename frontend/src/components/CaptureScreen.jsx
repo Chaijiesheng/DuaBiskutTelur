@@ -7,7 +7,7 @@ import Dialog from './Dialog.jsx'
 const supportsDragDrop =
   typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches
 
-export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
+export default function CaptureScreen({ online, onPhoto, onScanBarcode, onScanMenu }) {
   const { t } = useLanguage()
   // Two inputs because mobile browsers behave differently: with capture= the
   // camera opens directly, without it many phones jump straight to the file
@@ -16,21 +16,39 @@ export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
   const galleryInputRef = useRef(null)
   const [dragging, setDragging] = useState(false)
   const [showChooser, setShowChooser] = useState(false)
+  // Menu scanning is just a photo routed differently — reuses the same camera/
+  // gallery inputs above instead of adding a third pair, so this remembers
+  // which handler the next picked file is actually for.
+  const [pendingTarget, setPendingTarget] = useState('photo') // 'photo' | 'menu'
 
   const pick = (files) => {
     const file = files?.[0]
     if (file && file.type.startsWith('image/')) {
-      onPhoto(file)
+      if (pendingTarget === 'menu' && onScanMenu) {
+        onScanMenu(file)
+      } else {
+        onPhoto(file)
+      }
     }
   }
 
-  const openPicker = () => {
+  const openPickerFor = (target) => {
+    setPendingTarget(target)
     if (supportsDragDrop) {
       // Desktop: no camera to speak of — straight to the file dialog.
       galleryInputRef.current?.click()
     } else {
       setShowChooser(true)
     }
+  }
+
+  const openPicker = () => openPickerFor('photo')
+
+  // Dismissing the sheet without picking anything shouldn't leave a stale
+  // "menu" intent primed for the next time it's opened from the main circle.
+  const closeChooser = () => {
+    setShowChooser(false)
+    setPendingTarget('photo')
   }
 
   return (
@@ -54,7 +72,15 @@ export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
           if (!supportsDragDrop) return
           e.preventDefault()
           setDragging(false)
-          pick(e.dataTransfer.files)
+          // Dropping onto the main circle is always a meal photo — handled
+          // directly rather than through pick()/pendingTarget, since setState
+          // just before a synchronous read in the same handler wouldn't be
+          // visible yet (stale closure), even though it works fine everywhere
+          // else pick() is called (those all happen on a later render/tick).
+          const file = e.dataTransfer.files?.[0]
+          if (file && file.type.startsWith('image/')) {
+            onPhoto(file)
+          }
         }}
         className={`flex h-64 w-64 flex-col items-center justify-center gap-3 rounded-full border-4 shadow-xl transition
           ${
@@ -101,14 +127,29 @@ export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
           pointer-fine devices — openPicker() jumps straight to the file
           dialog there — so without this, desktop users have no way to reach
           barcode scanning at all. Shown everywhere for discoverability. */}
-      {onScanBarcode && (
-        <button
-          onClick={onScanBarcode}
-          className="flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-4 py-2 text-xs font-semibold text-green-800 active:scale-95 dark:border-green-900/40 dark:bg-green-900/10 dark:text-green-400"
-        >
-          🔖 {t('capture.scanBarcode')}
-        </button>
-      )}
+      <div className="flex flex-wrap justify-center gap-2">
+        {onScanBarcode && (
+          <button
+            onClick={onScanBarcode}
+            className="flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-4 py-2 text-xs font-semibold text-green-800 active:scale-95 dark:border-green-900/40 dark:bg-green-900/10 dark:text-green-400"
+          >
+            🔖 {t('capture.scanBarcode')}
+          </button>
+        )}
+        {onScanMenu && (
+          <button
+            disabled={!online}
+            onClick={() => openPickerFor('menu')}
+            className={`flex items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-semibold active:scale-95 ${
+              online
+                ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-400'
+                : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500'
+            }`}
+          >
+            📋 {t('capture.scanMenu')}
+          </button>
+        )}
+      </div>
 
       <p className="max-w-xs text-center text-xs leading-relaxed text-slate-500 dark:text-slate-400">
         {t('capture.footer')}
@@ -116,17 +157,17 @@ export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
 
       {showChooser && (
         <Dialog
-          onClose={() => setShowChooser(false)}
-          ariaLabel={t('capture.chooserTitle')}
+          onClose={closeChooser}
+          ariaLabel={pendingTarget === 'menu' ? t('capture.scanMenu') : t('capture.chooserTitle')}
           closeOnBackdrop
           overlayClassName="fixed inset-0 z-30 flex items-end justify-center bg-black/40"
           panelClassName="w-full max-w-md rounded-t-3xl bg-white p-5 pb-8 dark:bg-slate-800"
         >
             <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200 dark:bg-slate-600" />
             <p className="mb-3 text-center text-sm font-semibold text-slate-800 dark:text-slate-100">
-              {t('capture.chooserTitle')}
+              {pendingTarget === 'menu' ? t('capture.scanMenu') : t('capture.chooserTitle')}
             </p>
-            {onScanBarcode && (
+            {onScanBarcode && pendingTarget !== 'menu' && (
               <button
                 onClick={() => {
                   setShowChooser(false)
@@ -141,6 +182,22 @@ export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
                   </span>
                   <span className="block text-xs text-green-700/70 dark:text-green-500/70">
                     {t('capture.scanBarcodeHint')}
+                  </span>
+                </span>
+              </button>
+            )}
+            {onScanMenu && pendingTarget !== 'menu' && (
+              <button
+                onClick={() => setPendingTarget('menu')}
+                className="mb-3 flex w-full items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left active:scale-[0.99] dark:border-amber-900/40 dark:bg-amber-900/10"
+              >
+                <span className="text-2xl">📋</span>
+                <span>
+                  <span className="block text-sm font-bold text-amber-800 dark:text-amber-400">
+                    {t('capture.scanMenu')}
+                  </span>
+                  <span className="block text-xs text-amber-700/70 dark:text-amber-500/70">
+                    {t('capture.scanMenuHint')}
                   </span>
                 </span>
               </button>
@@ -168,7 +225,7 @@ export default function CaptureScreen({ online, onPhoto, onScanBarcode }) {
               </button>
             </div>
             <button
-              onClick={() => setShowChooser(false)}
+              onClick={closeChooser}
               className="mt-3 w-full py-2 text-center text-sm font-medium text-slate-500 dark:text-slate-400"
             >
               {t('capture.cancel')}

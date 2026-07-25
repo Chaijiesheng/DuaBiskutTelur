@@ -4,6 +4,7 @@ import MacroDonut from './MacroDonut.jsx'
 import CalorieBar from './CalorieBar.jsx'
 import FoodCard from './FoodCard.jsx'
 import ScoringRubric from './ScoringRubric.jsx'
+import { buildShareCard, downloadBlob } from '../shareCard.js'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 
 export default function ResultsScreen({
@@ -13,6 +14,7 @@ export default function ResultsScreen({
   onSnapAnother,
   actionLabel,
   onExportPdf,
+  shareImageSource,
   banner,
 }) {
   const { t } = useLanguage()
@@ -57,7 +59,10 @@ export default function ResultsScreen({
         <FeedbackList title={t('results.nextTime')} icon="💡" items={suggestions} tone="text-sky-700 dark:text-sky-400" />
       </div>
 
-      {onExportPdf && <ExportPdfButton onExportPdf={onExportPdf} />}
+      <div className={onExportPdf ? 'grid grid-cols-2 gap-3' : ''}>
+        <ShareButton result={result} imageSource={shareImageSource} />
+        {onExportPdf && <ExportPdfButton onExportPdf={onExportPdf} />}
+      </div>
 
       <button
         onClick={onSnapAnother}
@@ -65,6 +70,54 @@ export default function ResultsScreen({
       >
         {actionLabel || t('results.snapAnother')}
       </button>
+    </div>
+  )
+}
+
+function ShareButton({ result, imageSource }) {
+  const { t } = useLanguage()
+  const [state, setState] = useState('idle') // idle | preparing | error
+
+  const handleClick = async () => {
+    setState('preparing')
+    try {
+      const { blob, shareText } = await buildShareCard({
+        result,
+        imageSource,
+        brandTitle: `${t('app.title1')}${t('app.title2')}`,
+        shareText: t('results.shareText', result.grade),
+        barcodeLabel: t('results.verifiedFromBarcode'),
+      })
+      const file = new File([blob], 'duabiskuttelur-report.png', { type: 'image/png' })
+      const shareData = { files: [file], title: `${t('app.title1')}${t('app.title2')}`, text: shareText }
+      if (navigator.canShare?.(shareData)) {
+        await navigator.share(shareData)
+      } else {
+        downloadBlob(blob, 'duabiskuttelur-report.png')
+      }
+      setState('idle')
+    } catch (e) {
+      // The user backing out of the native share sheet isn't a failure.
+      if (e?.name === 'AbortError') {
+        setState('idle')
+        return
+      }
+      setState('error')
+    }
+  }
+
+  return (
+    <div>
+      <button
+        onClick={handleClick}
+        disabled={state === 'preparing'}
+        className="w-full rounded-2xl border border-slate-300 py-3 text-sm font-semibold text-slate-700 disabled:opacity-60 dark:border-slate-600 dark:text-slate-300"
+      >
+        {state === 'preparing' ? t('results.preparingShare') : t('results.share')}
+      </button>
+      {state === 'error' && (
+        <p className="mt-1.5 text-center text-xs text-red-500 dark:text-red-400">{t('results.shareError')}</p>
+      )}
     </div>
   )
 }

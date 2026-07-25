@@ -237,8 +237,10 @@ frontend unit tests** — see Outstanding issues.
 
 ## 10. Known limitations
 
-- **Single instance by design**: H2 file DB + in-memory sessions. The exit
-  path, if ever needed, is Postgres + Spring Session.
+- **Single instance by design**: H2 file DB. Sessions are Spring Session JDBC
+  (same H2 DB, 30-day cookie) rather than JVM heap, so signing in with Google
+  survives a backend restart/redeploy. The exit path, if ever needed, is
+  Postgres (swap the datasource; Spring Session JDBC works unchanged).
 - **Server-global time zone** (decision #9) — travelling users' "today" follows
   the server's market time zone.
 - **PWA update lag**: after a deploy, already-open clients pick up the new

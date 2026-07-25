@@ -15,9 +15,14 @@ server:
   forward-headers-strategy: native
   servlet:
     session:
+      # 30 days instead of Boot's 30-minute default: without this, re-opening
+      # the installed PWA after any real gap forced a fresh Google sign-in
+      # even though the session itself was still perfectly valid.
+      timeout: 30d
       cookie:
         same-site: lax
         http-only: true
+        max-age: 30d
 
 spring:
   application:
@@ -31,6 +36,12 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
+  session:
+    store-type: jdbc
+    jdbc:
+      # Flyway (V3__spring_session.sql) creates the tables, not Spring
+      # Session's own initializer — same reasoning as the Flyway block below.
+      initialize-schema: never
   jpa:
     hibernate:
       # Flyway (below) owns schema changes now — validate just checks the

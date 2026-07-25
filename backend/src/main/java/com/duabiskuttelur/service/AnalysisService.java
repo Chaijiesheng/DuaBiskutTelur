@@ -112,8 +112,11 @@ public class AnalysisService {
         return foods;
     }
 
-    /** USDA lookup per identified food; fall back to the model's per-100g estimate when it fails. */
-    private FoodItem resolveNutrition(IdentifiedFood cf) {
+    /**
+     * USDA lookup per identified food; fall back to the model's per-100g estimate when it fails.
+     * Package-visible so MenuRankingService can reuse the same USDA-lookup-with-fallback logic per dish.
+     */
+    FoodItem resolveNutrition(IdentifiedFood cf) {
         double grams = cf.grams() > 0 ? cf.grams() : 100;
         double factor = grams / 100.0;
 

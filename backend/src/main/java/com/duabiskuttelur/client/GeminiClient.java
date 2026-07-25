@@ -78,6 +78,48 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
             }
             If no food is visible, return an empty array []. Return ONLY the JSON array.""";
 
+    private static final String MENU_SYSTEM_PROMPT = """
+            You are a nutrition vision analyst for a Malaysian food-tracking app. \
+            You read restaurant and cafe MENUS — printed or handwritten lists of dishes available \
+            to order, not photos of plated food — and extract every distinct dish listed, including \
+            local dishes such as nasi lemak, roti canai, teh tarik, char kway teow, satay, laksa, \
+            rendang, mee goreng and kuih. Menus may mix English, Chinese and Malay on the same page; \
+            read every language present. Respond with STRICT JSON ONLY: a single JSON array, no prose, \
+            no markdown fences.""";
+
+    private static final String MENU_USER_PROMPT = """
+            This photo is a MENU (a list of dishes available to order), not a plate of food that has \
+            already been served. Identify every distinct dish or drink listed — do not invent dishes \
+            that aren't printed, and do not skip a dish just because its price is illegible. If the same \
+            dish name repeats in multiple languages on one line (e.g. "炒粿条 / Char Kway Teow"), treat it \
+            as ONE entry, not two. Ignore section headers, restaurant name/address, opening hours, and \
+            other non-food text. If a price is legibly printed next to a dish, fold it into that dish's \
+            "name" field as a trailing parenthetical (e.g. "Nasi Lemak (RM8.50)").
+
+            For each dish, assume a single typical serving size for that dish as it is normally served at \
+            a restaurant (there is no plate to measure, since this is a menu) and return a JSON array where \
+            each element has exactly these fields:
+            {
+              "name": string (dish name, include local name and English gloss if the menu shows both; fold in price if legible, see above),
+              "estimatedPortion": string (typical household measure AND grams for one serving, e.g. "1 plate / ~350g"),
+              "grams": number (typical serving weight in grams for this dish),
+              "usdaSearchTerm": string (closest generic equivalent likely to exist in USDA FoodData Central),
+              "fallbackCaloriesPer100g": number,
+              "fallbackProteinPer100g": number,
+              "fallbackCarbsPer100g": number,
+              "fallbackFatPer100g": number,
+              "fallbackFiberPer100g": number,
+              "fallbackSugarPer100g": number,
+              "fallbackSodiumPer100g": number (milligrams),
+              "foodGroup": one of "protein" | "grain" | "vegetable" | "fruit" | "dairy" | "fat" | "sweet" | "beverage",
+              "fried": boolean (true if the dish is typically deep-fried, based on its name/description),
+              "confidence": number between 0 and 1
+            }
+            If this photo is not a menu at all (e.g. it's a photo of a plated meal, a receipt, or something \
+            unrelated), return an empty array []. Return ONLY the JSON array, with at most 60 entries — if \
+            the menu has more than 60 dishes, return only the first 60 encountered reading top-to-bottom, \
+            left-to-right.""";
+
     public GeminiClient(AppProperties props, ObjectMapper mapper) {
         this.props = props;
         this.mapper = mapper;
@@ -113,6 +155,33 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
             return mapper.readerForListOf(IdentifiedFood.class).readValue(json);
         } catch (Exception e) {
             throw new IllegalStateException("Could not parse food list from Gemini response", e);
+        }
+    }
+
+    @Override
+    public List<IdentifiedFood> identifyMenuDishes(byte[] imageBytes, String mediaType) {
+        Map<String, Object> body = Map.of(
+                "systemInstruction", Map.of("parts", List.of(Map.of("text", MENU_SYSTEM_PROMPT))),
+                "contents", List.of(Map.of(
+                        "role", "user",
+                        "parts", List.of(
+                                Map.of("inlineData", Map.of(
+                                        "mimeType", mediaType,
+                                        "data", Base64.getEncoder().encodeToString(imageBytes))),
+                                Map.of("text", MENU_USER_PROMPT)))),
+                "generationConfig", Map.of(
+                        // Higher than identifyFoods' 4096: up to 60 dishes x ~13 fields each is a
+                        // meaningfully larger JSON array and could get truncated mid-array at the
+                        // lower limit, which would break extractJson's bracket matching.
+                        "maxOutputTokens", 8192,
+                        "responseMimeType", "application/json"));
+
+        String text = callWithRetry(props.getGeminiVisionModels(), body);
+        String json = extractJson(text, '[', ']');
+        try {
+            return mapper.readerForListOf(IdentifiedFood.class).readValue(json);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not parse menu dish list from Gemini response", e);
         }
     }
 
