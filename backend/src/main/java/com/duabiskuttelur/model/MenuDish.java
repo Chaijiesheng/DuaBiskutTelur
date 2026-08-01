@@ -7,6 +7,10 @@ public record MenuDish(
         int score,
         String grade,
         String tier,
+        // 1-based position across the whole menu, healthiest first. Menu scans
+        // saved before ranking existed deserialize to 0, which the frontend
+        // reads as "unranked" and simply doesn't render.
+        int rank,
         FoodItem nutrition
 ) {
 }

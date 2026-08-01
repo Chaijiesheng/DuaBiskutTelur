@@ -28,6 +28,14 @@ public class AppProperties {
     private List<String> geminiFeedbackModels = new ArrayList<>(List.of(
             "gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"));
     /**
+     * Menu scans use their own (shorter) chain rather than the vision list. Each
+     * attempt can burn up to menuReadTimeoutMs, so the chain length is bounded by
+     * how long the CDN in front of this app will hold a proxied request open —
+     * models x menuReadTimeoutMs has to stay comfortably under that ceiling.
+     */
+    private List<String> geminiMenuModels = new ArrayList<>(List.of(
+            "gemini-flash-latest", "gemini-2.5-flash"));
+    /**
      * Origins allowed to make credentialed cross-origin API calls. Only the
      * Vite dev server needs this — in production the frontend is served
      * same-origin behind nginx (which proxies /api), so no extra origin is
@@ -41,6 +49,14 @@ public class AppProperties {
     private String openFoodFactsBaseUrl = "https://world.openfoodfacts.org";
     private int connectTimeoutMs = 10_000;
     private int readTimeoutMs = 120_000;
+    /**
+     * Read timeout for menu scans only. A menu sends a higher-resolution image
+     * and asks the model to emit a much larger JSON array (dozens of dishes, ~13
+     * fields each), which regularly takes longer than a single-plate photo — at
+     * the plain readTimeoutMs those calls were being cut off mid-generation and
+     * reported as an overloaded provider.
+     */
+    private int menuReadTimeoutMs = 45_000;
     private int usdaRetries = 2;
 
     /** Configured Gemini keys with blanks removed, in priority order. */
@@ -66,6 +82,8 @@ public class AppProperties {
     public void setGeminiVisionModels(List<String> v) { this.geminiVisionModels = v; }
     public List<String> getGeminiFeedbackModels() { return geminiFeedbackModels; }
     public void setGeminiFeedbackModels(List<String> v) { this.geminiFeedbackModels = v; }
+    public List<String> getGeminiMenuModels() { return geminiMenuModels; }
+    public void setGeminiMenuModels(List<String> v) { this.geminiMenuModels = v; }
     public List<String> getCorsAllowedOrigins() { return corsAllowedOrigins; }
     public void setCorsAllowedOrigins(List<String> v) { this.corsAllowedOrigins = v; }
     public String getUsdaApiKey() { return usdaApiKey; }
@@ -78,6 +96,8 @@ public class AppProperties {
     public void setConnectTimeoutMs(int v) { this.connectTimeoutMs = v; }
     public int getReadTimeoutMs() { return readTimeoutMs; }
     public void setReadTimeoutMs(int v) { this.readTimeoutMs = v; }
+    public int getMenuReadTimeoutMs() { return menuReadTimeoutMs; }
+    public void setMenuReadTimeoutMs(int v) { this.menuReadTimeoutMs = v; }
     public int getUsdaRetries() { return usdaRetries; }
     public void setUsdaRetries(int v) { this.usdaRetries = v; }
 }

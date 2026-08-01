@@ -92,6 +92,14 @@ app:
     - gemini-flash-lite-latest
     - gemini-2.5-flash-lite
     - gemini-2.0-flash-lite
+  # Menus deliberately get a SHORTER chain than vision: each attempt may burn the
+  # full menu-read-timeout-ms, and models x timeout has to stay under Cloudflare's
+  # ~100s proxy ceiling (2 x 45s = 90s). gemini-2.0-flash is left out — it's the
+  # oldest model with the smallest free-tier daily quota, so it's the one most
+  # likely to be exhausted, and spending 45s discovering that isn't worth it.
+  gemini-menu-models:
+    - gemini-flash-latest
+    - gemini-2.5-flash
   # Only the Vite dev server needs a CORS entry — production serves the
   # frontend same-origin behind nginx. Extend (comma-separated) only if the
   # frontend is ever hosted on a different origin than the API.
@@ -99,9 +107,14 @@ app:
   usda-api-key: ${USDA_API_KEY:}
   open-food-facts-base-url: https://world.openfoodfacts.org
   connect-timeout-ms: 10000
-  # Per-call cap. Flash models answer in well under 30s; a hung call must fail
-  # fast so the fallback models get a chance within the gateway time budget.
+  # Per-call cap for plate photos and feedback. Flash models answer these in well
+  # under 30s; a hung call must fail fast so the fallback models get a chance
+  # within the gateway time budget.
   read-timeout-ms: 30000
+  # Menu scans need longer: a higher-resolution image in, and a JSON array of up
+  # to 60 dishes out. At 30s these were being cut off mid-generation and surfaced
+  # as "analyzer is busy" even though the model and every API key were healthy.
+  menu-read-timeout-ms: 45000
   usda-retries: 2
 
 # Scoring engine thresholds — every value here is tunable (see ScoringProperties)

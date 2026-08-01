@@ -76,7 +76,8 @@ class MenuControllerTest {
     private static IdentifiedFood dish(String name, String group, boolean fried,
                                         double caloriesPer100g, double sodiumPer100g, double grams) {
         return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams,
-                name, caloriesPer100g, 8, 15, 6, 1.5, 2, sodiumPer100g, group, fried, 0.9);
+                name, caloriesPer100g, 8, 15, 6, 1.5, 2, sodiumPer100g, group, fried, 0.9,
+                IdentifiedFood.KIND_MAIN);
     }
 
     private static List<IdentifiedFood> spreadAcrossTiers() {

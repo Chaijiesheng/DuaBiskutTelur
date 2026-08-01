@@ -11,10 +11,15 @@ function ConfidenceDot({ confidence }) {
   )
 }
 
-/** Collapsed: name, portion, kcal, confidence. Tap to expand full macros. */
-export default function FoodCard({ food }) {
+/**
+ * Collapsed: name, portion, kcal, confidence. Tap to expand full macros.
+ * Pass defaultOpen when the card is already the thing the user just asked to
+ * see (the menu tier list opens one dish at a time), so the macros don't need
+ * a second tap. Only read on mount — remount with a new key to reset it.
+ */
+export default function FoodCard({ food, defaultOpen = false }) {
   const { t } = useLanguage()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
 
   return (
     <button

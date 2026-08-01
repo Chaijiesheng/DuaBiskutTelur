@@ -25,11 +25,26 @@ for (const lang of ['zh', 'ms']) {
   }
 }
 
-if (en.analyzing.insights.length !== zh.analyzing.insights.length ||
-    en.analyzing.insights.length !== ms.analyzing.insights.length) {
-  failed = true
-  console.error('✗ analyzing.insights arrays differ in length:',
-    en.analyzing.insights.length, zh.analyzing.insights.length, ms.analyzing.insights.length)
+// keys() treats an array as a single leaf, so a translation that dropped one
+// entry would pass the check above while silently rendering a short list. Done
+// generically rather than per-key so new arrays are covered the day they land.
+function arrayLengths(obj, prefix = '') {
+  return Object.entries(obj).flatMap(([k, v]) => {
+    if (Array.isArray(v)) return [[`${prefix}${k}`, v.length]]
+    if (typeof v === 'object' && v !== null) return arrayLengths(v, `${prefix}${k}.`)
+    return []
+  })
+}
+
+const enArrays = Object.fromEntries(arrayLengths(en))
+for (const [lang, dict] of [['zh', zh], ['ms', ms]]) {
+  const langArrays = Object.fromEntries(arrayLengths(dict))
+  for (const [path, length] of Object.entries(enArrays)) {
+    if (langArrays[path] !== length) {
+      failed = true
+      console.error(`✗ ${lang} ${path} has ${langArrays[path]} entries, en has ${length}`)
+    }
+  }
 }
 
 if (failed) process.exit(1)

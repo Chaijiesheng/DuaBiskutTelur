@@ -460,7 +460,12 @@ function AppShell() {
             onLogout={doLogout}
           />
         ) : phase === 'analyzing' ? (
-          <AnalyzingScreen titleKey={lastMenuFile ? 'analyzing.titleMenu' : 'analyzing.title'} />
+          <AnalyzingScreen
+            titleKey={lastMenuFile ? 'analyzing.titleMenu' : 'analyzing.title'}
+            // Only menu scans are slow enough to need a progress breakdown; a
+            // plate photo is back before the first step would even change.
+            steps={lastMenuFile ? t('analyzing.menuSteps') : undefined}
+          />
         ) : phase === 'results' && result ? (
           <ResultsScreen
             result={result}

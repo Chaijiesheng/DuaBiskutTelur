@@ -21,6 +21,26 @@ public record IdentifiedFood(
         double fallbackSodiumPer100g,
         String foodGroup,
         boolean fried,
-        double confidence
+        double confidence,
+        /**
+         * Menu scans only: "main", "addon" or "drink", read off the menu's own
+         * sections. Null for plate photos, which have no such notion — every
+         * caller treats null as a main. Lets menu ranking keep condiments and
+         * teh tarik out of a tier list that's meant to answer "what should I
+         * order", where a spoon of sambal isn't a competing answer.
+         */
+        String kind
 ) {
+    public static final String KIND_MAIN = "main";
+    public static final String KIND_ADDON = "addon";
+    public static final String KIND_DRINK = "drink";
+
+    /** True for anything that isn't a dish you'd order as your meal. */
+    public boolean isSideOrDrink() {
+        // Belt and braces: the model classifies from the menu layout, but a
+        // beverage is a drink whatever section it was printed in.
+        return KIND_ADDON.equalsIgnoreCase(kind)
+                || KIND_DRINK.equalsIgnoreCase(kind)
+                || "beverage".equalsIgnoreCase(foodGroup);
+    }
 }

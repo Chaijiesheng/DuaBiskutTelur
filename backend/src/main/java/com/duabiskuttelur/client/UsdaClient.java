@@ -8,6 +8,10 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -32,6 +36,21 @@ public class UsdaClient {
     ) {
     }
 
+    /**
+     * Access-ordered LRU, capped so a long-running instance can't accumulate
+     * unbounded entries from novel search terms. Wrapped for thread safety
+     * because menu scans resolve their dishes concurrently.
+     */
+    private static final int CACHE_MAX_ENTRIES = 500;
+
+    private final Map<String, Optional<NutrientsPer100g>> cache = Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Optional<NutrientsPer100g>> eldest) {
+                    return size() > CACHE_MAX_ENTRIES;
+                }
+            });
+
     private final AppProperties props;
     private final RestClient restClient;
 
@@ -49,11 +68,38 @@ public class UsdaClient {
     /**
      * Search FoodData Central for the term and return per-100g nutrients of the
      * top match. Empty when nothing matched or all retries failed.
+     *
+     * <p>Results are memoized per search term. Menus repeat heavily — both
+     * within one scan and across scans of similar restaurants — and a dish's
+     * reference nutrition doesn't change, so the second lookup of "teh tarik"
+     * costs nothing. Genuine "no match" answers are cached too (they cost a
+     * full round trip to discover, and a term USDA doesn't know today it won't
+     * know in five minutes either); transient failures are not.
      */
     public Optional<NutrientsPer100g> lookup(String searchTerm) {
         if (!props.hasUsdaKey()) {
             return Optional.empty();
         }
+        String cacheKey = searchTerm == null ? "" : searchTerm.trim().toLowerCase(Locale.ROOT);
+        Optional<NutrientsPer100g> cached = cache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        LookupOutcome outcome = fetch(searchTerm);
+        if (outcome.cacheable()) {
+            cache.put(cacheKey, outcome.value());
+        }
+        return outcome.value();
+    }
+
+    /**
+     * @param cacheable false when every attempt errored out, so a network blip
+     *                  can't poison the cache with a permanent empty result.
+     */
+    private record LookupOutcome(Optional<NutrientsPer100g> value, boolean cacheable) {
+    }
+
+    private LookupOutcome fetch(String searchTerm) {
         int attempts = props.getUsdaRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             try {
@@ -68,18 +114,18 @@ public class UsdaClient {
                         .retrieve()
                         .body(JsonNode.class);
                 if (response == null) {
-                    return Optional.empty();
+                    return new LookupOutcome(Optional.empty(), true);
                 }
                 JsonNode foods = response.path("foods");
                 if (!foods.isArray() || foods.isEmpty()) {
-                    return Optional.empty();
+                    return new LookupOutcome(Optional.empty(), true);
                 }
-                return Optional.of(parseFood(foods.get(0)));
+                return new LookupOutcome(Optional.of(parseFood(foods.get(0))), true);
             } catch (Exception e) {
                 log.warn("USDA lookup failed for '{}' (attempt {}/{}): {}", searchTerm, attempt, attempts, e.getMessage());
             }
         }
-        return Optional.empty();
+        return new LookupOutcome(Optional.empty(), false);
     }
 
     private NutrientsPer100g parseFood(JsonNode food) {

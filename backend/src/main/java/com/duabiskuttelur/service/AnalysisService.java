@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -43,6 +44,7 @@ public class AnalysisService {
 
     private final VisionAnalysisClient visionClient;
     private final UsdaClient usdaClient;
+    private final LocalDishTable localDishTable;
     private final ScoringService scoringService;
     private final FeedbackService feedbackService;
     private final DashboardService dashboardService;
@@ -52,11 +54,13 @@ public class AnalysisService {
     private final ObjectMapper mapper;
 
     public AnalysisService(VisionAnalysisClient visionClient, UsdaClient usdaClient,
+                           LocalDishTable localDishTable,
                            ScoringService scoringService, FeedbackService feedbackService,
                            DashboardService dashboardService, ThumbnailService thumbnailService,
                            MealAnalysisRepository repository, AppProperties props, ObjectMapper mapper) {
         this.visionClient = visionClient;
         this.usdaClient = usdaClient;
+        this.localDishTable = localDishTable;
         this.scoringService = scoringService;
         this.feedbackService = feedbackService;
         this.dashboardService = dashboardService;
@@ -113,8 +117,13 @@ public class AnalysisService {
     }
 
     /**
-     * USDA lookup per identified food; fall back to the model's per-100g estimate when it fails.
-     * Package-visible so MenuRankingService can reuse the same USDA-lookup-with-fallback logic per dish.
+     * USDA lookup per identified food, falling back to the model's per-100g
+     * estimate when the lookup misses or comes back with something that isn't
+     * credible for this dish (see NutritionValidator — USDA's fuzzy search will
+     * happily answer about a composite restaurant dish with whatever generic
+     * row was closest).
+     *
+     * <p>Package-visible so MenuRankingService can reuse the same logic per dish.
      */
     FoodItem resolveNutrition(IdentifiedFood cf) {
         double grams = cf.grams() > 0 ? cf.grams() : 100;
@@ -123,23 +132,57 @@ public class AnalysisService {
         String searchTerm = cf.usdaSearchTerm() != null && !cf.usdaSearchTerm().isBlank()
                 ? cf.usdaSearchTerm() : cf.name();
 
-        return usdaClient.lookup(searchTerm)
-                .filter(n -> n.calories() > 0)
-                .map(n -> new FoodItem(cf.name(), cf.estimatedPortion(),
-                        round1(n.calories() * factor), round1(n.protein() * factor),
-                        round1(n.carbs() * factor), round1(n.fat() * factor),
-                        round1(n.fiber() * factor), round1(n.sugar() * factor),
-                        round1(n.sodium() * factor),
-                        clampConfidence(cf.confidence()), "usda", cf.foodGroup(), cf.fried()))
-                .orElseGet(() -> {
-                    log.info("Using model fallback estimate for '{}'", cf.name());
-                    return new FoodItem(cf.name(), cf.estimatedPortion(),
-                            round1(cf.fallbackCaloriesPer100g() * factor), round1(cf.fallbackProteinPer100g() * factor),
-                            round1(cf.fallbackCarbsPer100g() * factor), round1(cf.fallbackFatPer100g() * factor),
-                            round1(cf.fallbackFiberPer100g() * factor), round1(cf.fallbackSugarPer100g() * factor),
-                            round1(cf.fallbackSodiumPer100g() * factor),
-                            clampConfidence(cf.confidence()), "estimated", cf.foodGroup(), cf.fried());
-                });
+        Optional<UsdaClient.NutrientsPer100g> match = usdaClient.lookup(searchTerm)
+                .filter(n -> n.calories() > 0);
+        if (match.isPresent()) {
+            Optional<String> rejection = NutritionValidator.rejectionReason(match.get(), cf);
+            if (rejection.isEmpty()) {
+                return scaled(cf, match.get(), factor, "usda", cf.foodGroup(), cf.fried());
+            }
+            log.info("Rejected USDA match '{}' for '{}': {}", match.get().matchedDescription(),
+                    cf.name(), rejection.get());
+        } else {
+            log.info("No USDA match for '{}'", cf.name());
+        }
+
+        // Only now. The obvious design was to answer local dishes from the
+        // table before USDA ever ran, and on a 30-dish Malaysian benchmark that
+        // was measurably worse — rho 0.665 against 0.790 for this ordering.
+        // A curated row is one generic figure for a dish every stall cooks
+        // differently, so it loses to a specific match that passed validation;
+        // it only wins where that path has already failed, which is exactly
+        // where USDA was inventing 0g-carbohydrate nasi lemak. The curated
+        // group and fried flag come along, being properties of the dish rather
+        // than of the lookup.
+        Optional<LocalDishTable.Entry> local = localDishTable.lookup(cf.name());
+        if (local.isPresent()) {
+            LocalDishTable.Entry e = local.get();
+            log.info("Using the local dish table for '{}' ('{}')", cf.name(), e.canonical());
+            return scaled(cf, e.nutrients(), factor, "local", e.foodGroup(), e.fried());
+        }
+
+        log.info("Using the model's estimate for '{}'", cf.name());
+        return modelEstimate(cf, factor);
+    }
+
+    private FoodItem scaled(IdentifiedFood cf, UsdaClient.NutrientsPer100g n, double factor,
+                            String source, String foodGroup, boolean fried) {
+        return new FoodItem(cf.name(), cf.estimatedPortion(),
+                round1(n.calories() * factor), round1(n.protein() * factor),
+                round1(n.carbs() * factor), round1(n.fat() * factor),
+                round1(n.fiber() * factor), round1(n.sugar() * factor),
+                round1(n.sodium() * factor),
+                clampConfidence(cf.confidence()), source, foodGroup, fried);
+    }
+
+    /** The vision model's own per-100g numbers, scaled to the serving. */
+    private FoodItem modelEstimate(IdentifiedFood cf, double factor) {
+        return new FoodItem(cf.name(), cf.estimatedPortion(),
+                round1(cf.fallbackCaloriesPer100g() * factor), round1(cf.fallbackProteinPer100g() * factor),
+                round1(cf.fallbackCarbsPer100g() * factor), round1(cf.fallbackFatPer100g() * factor),
+                round1(cf.fallbackFiberPer100g() * factor), round1(cf.fallbackSugarPer100g() * factor),
+                round1(cf.fallbackSodiumPer100g() * factor),
+                clampConfidence(cf.confidence()), "estimated", cf.foodGroup(), cf.fried());
     }
 
     private void persist(AnalysisResponse response, byte[] imageBytes, Long userId) {
