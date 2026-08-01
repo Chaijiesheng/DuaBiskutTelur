@@ -27,6 +27,9 @@ class NutritionResolutionTest {
     /** No USDA key configured, so every lookup misses and resolution falls through. */
     private AnalysisService serviceWithoutUsda() {
         AppProperties props = new AppProperties();
+        // Off in production until the gate rejects on per-serving totals; these
+        // tests describe the path itself, which is what stays true either way.
+        props.setLocalDishTableEnabled(true);
         LocalDishTable table = new LocalDishTable();
         table.load();
         return new AnalysisService(null, new UsdaClient(props), table,

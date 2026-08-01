@@ -57,6 +57,20 @@ public class AppProperties {
      * reported as an overloaded provider.
      */
     private int menuReadTimeoutMs = 45_000;
+    /**
+     * Whether a rejected USDA match falls back to the curated local dish table
+     * before the model's own estimate.
+     *
+     * <p>Off by default: measured on the 30-dish benchmark it made production
+     * rankings worse (rho 0.42-0.58 over three scans, against 0.63 without it).
+     * The offline study that justified it assumed the table would rescue the
+     * five dishes whose nutrition was arithmetically impossible; in production
+     * the validator rejects 10-15 per scan, so the table displaces sound USDA
+     * data far more often than intended. Re-enable once the gate rejects on
+     * per-serving totals rather than per-100g density — see
+     * docs/menu-ranking-evaluation.md.
+     */
+    private boolean localDishTableEnabled = false;
     private int usdaRetries = 2;
 
     /** Configured Gemini keys with blanks removed, in priority order. */
@@ -96,6 +110,8 @@ public class AppProperties {
     public void setConnectTimeoutMs(int v) { this.connectTimeoutMs = v; }
     public int getReadTimeoutMs() { return readTimeoutMs; }
     public void setReadTimeoutMs(int v) { this.readTimeoutMs = v; }
+    public boolean isLocalDishTableEnabled() { return localDishTableEnabled; }
+    public void setLocalDishTableEnabled(boolean v) { this.localDishTableEnabled = v; }
     public int getMenuReadTimeoutMs() { return menuReadTimeoutMs; }
     public void setMenuReadTimeoutMs(int v) { this.menuReadTimeoutMs = v; }
     public int getUsdaRetries() { return usdaRetries; }

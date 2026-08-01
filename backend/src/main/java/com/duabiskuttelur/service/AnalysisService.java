@@ -154,7 +154,9 @@ public class AnalysisService {
         // where USDA was inventing 0g-carbohydrate nasi lemak. The curated
         // group and fried flag come along, being properties of the dish rather
         // than of the lookup.
-        Optional<LocalDishTable.Entry> local = localDishTable.lookup(cf.name());
+        Optional<LocalDishTable.Entry> local = props.isLocalDishTableEnabled()
+                ? localDishTable.lookup(cf.name())
+                : Optional.empty();
         if (local.isPresent()) {
             LocalDishTable.Entry e = local.get();
             log.info("Using the local dish table for '{}' ('{}')", cf.name(), e.canonical());
