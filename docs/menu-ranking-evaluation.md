@@ -341,7 +341,39 @@ The five new validation rules — implausible protein, dry-ingredient carbohydra
 
 Backend suite is now **152 tests, all green**, including the 10 domain-judgment ranking tests.
 
-Net across both addenda: **ρ 0.632 → 0.790**, τ-b 0.462 → 0.591, mean rank displacement 5.60 → 4.33 places, bottom-10 recovery 7/10 → 9/10. With n = 30 the 95% confidence interval on 0.790 is roughly [0.60, 0.90], so the size of the gain is softer than the direction of it — every individual change was verified to move the specific dishes it was aimed at.
+Offline, net across both addenda: ρ 0.632 → 0.790. **That result did not survive contact with production.** See §11.
+
+## 11. Addendum — what production actually measured, and what it invalidates
+
+Both addenda above were measured by replaying one captured scan with nutrition held fixed, which isolates a scoring change cleanly. Deploying and re-scanning the same menu image five times told a different story.
+
+| Phase | ρ per scan | Mean ρ | Sources used |
+|---|---|---|---|
+| Before any change | 0.632 | 0.632 | 19 USDA / 11 model |
+| Dish table enabled | 0.421, 0.580, 0.453 | **0.484** | ~17 USDA / ~13 table |
+| Dish table gated off | 0.621, 0.571 | **0.596** | ~17 USDA / ~13 model |
+
+**The dish table was a regression and has been switched off** (`app.local-dish-table-enabled`, default false).
+
+Two things went wrong, and both are worth recording because neither was visible offline.
+
+**A units mismatch in the new validation rules.** They were derived from per-serving pathologies but are applied to per-100g density, so every threshold is wrong by the portion size. Bak Kut Teh resolves to 1143 kcal and 3051 mg of sodium for one bowl — which is 254 kcal and 678 mg per 100 g, entirely plausible. Nothing fires, the bad row is kept, and the dish still ranks last. The rules catch nothing they were built to catch.
+
+**The offline study modelled the wrong fallback rate.** It assumed the table would rescue the five dishes whose nutrition was arithmetically impossible. In production the validator rejects 10–15 of 30 per scan, so the table displaces sound USDA data far more often than modelled — which is exactly the failure mode already measured for consulting the table first (ρ 0.665), reached by a different route.
+
+**The larger lesson is about the measurement, not the table.** Re-scanning the same image gives materially different nutrition each time: Claypot Chicken Rice came back at 700 kcal on one scan and 482 on another; Popiah at 220 then 167; Chicken Satay resolved to a model estimate once and to a USDA row with 55 g of carbohydrate and 3345 mg of sodium the next. Scan-to-scan variance is comparable in magnitude to every scoring effect measured in §9 and §10, which means:
+
+- The §9 result (ρ 0.632 → 0.717 from the scoring fixes) is **not confirmed in production**. Post-change scans average 0.596 against a 0.632 baseline — indistinguishable at this sample size.
+- Single-scan A/B tests on this system cannot resolve differences of this size. Any future scoring claim needs several scans per configuration, and a benchmark larger than 30 dishes.
+- The dominant error source is **input variance in dish identification and nutrition lookup**, not the scoring formula. Effort spent tuning the formula is effort spent on the smaller term.
+
+The scoring changes from §9 remain deployed: they are defensible on their own merits — a fat penalty should reflect how much fat there is, and a 63 g dessert should cost more than a 30 g one — and no scan showed them doing harm. But they should be understood as principled rather than proven.
+
+**Revised priorities, in light of this:**
+
+1. Make the pipeline deterministic before tuning it further. Cache resolved nutrition per canonical dish name so the same dish yields the same numbers across scans; the variance above is largely a lookup lottery being re-rolled each time.
+2. Fix the validation rules to test per-serving totals as well as per-100 g density, then re-measure over ≥5 scans per configuration.
+3. Only then revisit the dish table, with the fallback rate measured rather than assumed.
 
 ---
 
