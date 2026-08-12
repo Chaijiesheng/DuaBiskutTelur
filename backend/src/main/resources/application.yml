@@ -92,6 +92,15 @@ app:
     - gemini-flash-lite-latest
     - gemini-2.5-flash-lite
     - gemini-2.0-flash-lite
+  # Menus deliberately get a SHORTER chain than vision: each attempt may burn the
+  # full menu-read-timeout-ms, and models x timeout has to stay under the ~100s
+  # proxy ceiling in front of this app (2 x 45s = 90s). gemini-2.0-flash is left
+  # out — it is the oldest model with the smallest free-tier daily quota, so it
+  # is the likeliest to be exhausted, and spending 45s finding that out is not
+  # worth it.
+  gemini-menu-models:
+    - gemini-flash-latest
+    - gemini-2.5-flash
   # Only the Vite dev server needs a CORS entry — production serves the
   # frontend same-origin behind nginx. Extend (comma-separated) only if the
   # frontend is ever hosted on a different origin than the API.
@@ -102,6 +111,10 @@ app:
   # Per-call cap. Flash models answer in well under 30s; a hung call must fail
   # fast so the fallback models get a chance within the gateway time budget.
   read-timeout-ms: 30000
+  # Menu scans need longer: a higher-resolution image in, and a JSON array of up
+  # to 60 dishes out. At 30s these were cut off mid-generation and surfaced as
+  # "analyzer is busy" even though the model and every API key were healthy.
+  menu-read-timeout-ms: 45000
   # Total wall clock for one Gemini call chain — every model x key attempt plus
   # the backoff sleeps, not per call. Without it the schedule multiplies out to
   # ~18 minutes (4 backoff rounds x 3 models x 3 keys x the 30s read timeout) of
@@ -124,6 +137,10 @@ app:
   # only requests that actually reached Gemini are holding one. Well above what
   # the free tier's ~15 req/min per key can sustain, so it never throttles
   # healthy traffic — it exists purely as a ceiling.
+  # Menus need a bigger ceiling than meals: their per-call timeout is 45s and the
+  # chain is two models, so the meal budget would cut the second attempt off
+  # before it began. Still inside the ~100s proxy limit.
+  gemini-menu-budget-ms: 90000
   gemini-max-concurrent-calls: 16
   # One retry, not two: a USDA failure is usually the service being slow or
   # down, and a menu scan pays this per dish. Genuinely transient blips are rare

@@ -28,6 +28,18 @@ public class AppProperties {
     private List<String> geminiFeedbackModels = new ArrayList<>(List.of(
             "gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"));
     /**
+     * Menu scans use their own, shorter chain rather than the vision list. Each
+     * attempt can burn the full menuReadTimeoutMs, so models x timeout has to
+     * stay under the ~100s ceiling the CDN in front of this app will hold a
+     * proxied request open for (2 x 45s = 90s). gemini-2.0-flash is left out
+     * deliberately: it is the oldest model with the smallest free-tier daily
+     * quota, so it is the likeliest to be exhausted, and spending 45s
+     * discovering that is not worth it.
+     */
+    private List<String> geminiMenuModels = new ArrayList<>(List.of(
+            "gemini-flash-latest", "gemini-2.5-flash"));
+
+    /**
      * Origins allowed to make credentialed cross-origin API calls. Only the
      * Vite dev server needs this — in production the frontend is served
      * same-origin behind nginx (which proxies /api), so no extra origin is
@@ -41,6 +53,15 @@ public class AppProperties {
     private String openFoodFactsBaseUrl = "https://world.openfoodfacts.org";
     private int connectTimeoutMs = 10_000;
     private int readTimeoutMs = 30_000;
+
+    /**
+     * Read timeout for menu scans only. A menu sends a higher-resolution image
+     * and asks the model to emit a much larger JSON array (dozens of dishes,
+     * ~13 fields each), which regularly takes longer than a single-plate photo.
+     * At the shared readTimeoutMs those calls were cut off mid-generation and
+     * surfaced as "analyzer is busy" while the model and every key were healthy.
+     */
+    private int menuReadTimeoutMs = 45_000;
     private int usdaRetries = 1;
 
     /**
@@ -79,6 +100,14 @@ public class AppProperties {
      * stay inside the gateway's own read timeout.
      */
     private int geminiFeedbackBudgetMs = 25_000;
+
+    /**
+     * And a larger ceiling for menus, because their per-call timeout is larger.
+     * The chain is two models at menuReadTimeoutMs each; under the meal budget
+     * the second attempt could never start, quietly undoing the failover the
+     * chain exists to provide. 90s still clears the ~100s proxy ceiling.
+     */
+    private int geminiMenuBudgetMs = 90_000;
 
     /**
      * How many Gemini calls may be in flight at once across the whole JVM. The
@@ -142,6 +171,12 @@ public class AppProperties {
     public void setMenuResolveParallelism(int v) { this.menuResolveParallelism = v; }
     public int getGeminiBudgetMs() { return geminiBudgetMs; }
     public void setGeminiBudgetMs(int v) { this.geminiBudgetMs = v; }
+    public List<String> getGeminiMenuModels() { return geminiMenuModels; }
+    public void setGeminiMenuModels(List<String> v) { this.geminiMenuModels = v; }
+    public int getMenuReadTimeoutMs() { return menuReadTimeoutMs; }
+    public void setMenuReadTimeoutMs(int v) { this.menuReadTimeoutMs = v; }
+    public int getGeminiMenuBudgetMs() { return geminiMenuBudgetMs; }
+    public void setGeminiMenuBudgetMs(int v) { this.geminiMenuBudgetMs = v; }
     public int getGeminiFeedbackBudgetMs() { return geminiFeedbackBudgetMs; }
     public void setGeminiFeedbackBudgetMs(int v) { this.geminiFeedbackBudgetMs = v; }
     public int getGeminiMaxConcurrentCalls() { return geminiMaxConcurrentCalls; }

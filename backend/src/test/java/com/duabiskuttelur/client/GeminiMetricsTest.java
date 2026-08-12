@@ -99,6 +99,7 @@ class GeminiMetricsTest {
 
         AppProperties props = propsFor(server.getAddress().getPort(), List.of("vision-model"));
         props.setGeminiFeedbackModels(List.of("feedback-model"));
+        props.setGeminiMenuModels(List.of("vision-model"));
         GeminiClient client = new GeminiClient(props, new ObjectMapper(), meters);
 
         client.identifyFoods(FAKE_IMAGE, "image/jpeg");

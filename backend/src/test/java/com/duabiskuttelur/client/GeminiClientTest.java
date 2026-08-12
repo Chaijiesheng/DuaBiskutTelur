@@ -45,6 +45,66 @@ class GeminiClientTest {
         }
     }
 
+    /**
+     * A menu scan is not a plate photo: a bigger image goes up and a JSON array
+     * of dozens of dishes comes back, so it gets its own model chain and its own
+     * read timeout. Shipped once without this and the menu client was built but
+     * never actually handed to the call — the settings existed and did nothing.
+     */
+    @Test
+    void menuScansUseTheirOwnModelChain() throws Exception {
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.setExecutor(Executors.newCachedThreadPool());
+        List<String> hits = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        for (String model : List.of("vision-model", "menu-model")) {
+            server.createContext("/v1beta/models/" + model + ":generateContent", exchange -> {
+                hits.add(model);
+                respondOk(exchange, "\"[]\"");
+            });
+        }
+        server.start();
+
+        AppProperties props = propsFor(server.getAddress().getPort(), 5_000, List.of("vision-model"));
+        props.setGeminiMenuModels(List.of("menu-model"));
+        GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
+
+        client.identifyFoods(FAKE_IMAGE, "image/jpeg");
+        client.identifyMenuDishes(FAKE_IMAGE, "image/jpeg");
+
+        assertEquals(List.of("vision-model", "menu-model"), hits,
+                "the menu call did not use app.gemini-menu-models");
+    }
+
+    /**
+     * And the longer timeout has to reach the wire, not just the properties —
+     * a menu waits where a plate photo would already have given up.
+     */
+    @Test
+    void menuScansGetTheLongerReadTimeout() throws Exception {
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.setExecutor(Executors.newCachedThreadPool());
+        server.createContext("/v1beta/models/menu-model:generateContent", exchange -> {
+            // Longer than the plate-photo timeout, shorter than the menu one.
+            try {
+                Thread.sleep(700);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            respondOk(exchange, "\"[]\"");
+        });
+        server.start();
+
+        AppProperties props = propsFor(server.getAddress().getPort(), 200, List.of("vision-model"));
+        props.setGeminiMenuModels(List.of("menu-model"));
+        props.setMenuReadTimeoutMs(5_000);
+        GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
+
+        // At the shared 200ms read timeout this would have been cut off and
+        // reported as an overloaded provider, which is the bug it fixes.
+        assertTrue(client.identifyMenuDishes(FAKE_IMAGE, "image/jpeg").isEmpty(),
+                "the menu call did not complete within its own read timeout");
+    }
+
     private AppProperties propsFor(int port, int readTimeoutMs, List<String> models) {
         AppProperties props = new AppProperties();
         props.setGeminiApiKeys(List.of("test-key"));
@@ -218,6 +278,7 @@ class GeminiClientTest {
 
         AppProperties props = propsFor(server.getAddress().getPort(), 5_000, List.of("vision-model"));
         props.setGeminiFeedbackModels(List.of("feedback-model"));
+        props.setGeminiMenuModels(List.of("vision-model"));
         GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
 
         client.identifyFoods(FAKE_IMAGE, "image/jpeg");

@@ -80,6 +80,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
     private final AppProperties props;
     private final ObjectMapper mapper;
     private final RestClient restClient;
+    private final RestClient menuRestClient;
     private final GeminiKeyPool keyPool;
     private final Semaphore providerSlots;
     private final MeterRegistry meters;
@@ -331,10 +332,19 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
         Gauge.builder(AppMetrics.GEMINI_SLOTS_AVAILABLE, providerSlots, Semaphore::availablePermits)
                 .description("Free Gemini bulkhead slots; zero means the next caller waits then sheds")
                 .register(meters);
+        this.restClient = clientWithReadTimeout(props, props.getReadTimeoutMs());
+        // Menus get their own client purely for the longer read timeout: a
+        // bigger image in and a JSON array of dozens of dishes out regularly
+        // outruns the plate-photo budget, and at the shared 30s those calls
+        // were cut off mid-generation and reported as an overloaded provider.
+        this.menuRestClient = clientWithReadTimeout(props, props.getMenuReadTimeoutMs());
+    }
+
+    private static RestClient clientWithReadTimeout(AppProperties props, int readTimeoutMs) {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(props.getConnectTimeoutMs());
-        factory.setReadTimeout(props.getReadTimeoutMs());
-        this.restClient = RestClient.builder()
+        factory.setReadTimeout(readTimeoutMs);
+        return RestClient.builder()
                 .baseUrl(props.getGeminiBaseUrl())
                 .requestFactory(factory)
                 .defaultHeader("content-type", "application/json")
@@ -357,7 +367,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                 // before the answer starts.
                 "generationConfig", generationConfig(8192, FOOD_ITEM_SCHEMA));
 
-        String text = callWithRetry(props.getGeminiVisionModels(), body, props.getGeminiBudgetMs(), "vision");
+        String text = callWithRetry(props.getGeminiVisionModels(), body, props.getGeminiBudgetMs(), "vision", restClient);
         String json = extractJson(text, '[', ']');
         try {
             return mapper.readerForListOf(IdentifiedFood.class).readValue(json);
@@ -383,7 +393,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                 // budget outright, so a full menu could truncate every time.
                 "generationConfig", generationConfig(16384, FOOD_ITEM_SCHEMA));
 
-        String text = callWithRetry(props.getGeminiVisionModels(), body, props.getGeminiBudgetMs(), "menu");
+        String text = callWithRetry(props.getGeminiMenuModels(), body, props.getGeminiMenuBudgetMs(), "menu", menuRestClient);
         String json = extractJson(text, '[', ']');
         try {
             return mapper.readerForListOf(IdentifiedFood.class).readValue(json);
@@ -419,7 +429,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                 // calls, on a much smaller answer.
                 "generationConfig", generationConfig(2048, FEEDBACK_SCHEMA));
 
-        String text = callWithRetry(props.getGeminiFeedbackModels(), body, props.getGeminiFeedbackBudgetMs(), "feedback");
+        String text = callWithRetry(props.getGeminiFeedbackModels(), body, props.getGeminiFeedbackBudgetMs(), "feedback", restClient);
         String json = extractJson(text, '{', '}');
         try {
             return mapper.readValue(json, FeedbackResult.class);
@@ -452,7 +462,8 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
      * thread pool is gone, which takes down every other endpoint too, so the
      * ceiling is what keeps a provider outage from becoming an app outage.
      */
-    private String callWithRetry(List<String> models, Map<String, Object> body, int budgetMs, String callType) {
+    private String callWithRetry(List<String> models, Map<String, Object> body, int budgetMs,
+                                 String callType, RestClient client) {
         if (keyPool.isEmpty()) {
             throw new IllegalStateException("No Gemini API key configured");
         }
@@ -470,7 +481,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
             throw new ProviderBusyException("No free Gemini slot within " + SLOT_WAIT_MS + "ms");
         }
         try {
-            String text = callWithinBudget(models, body, budgetMs, callType);
+            String text = callWithinBudget(models, body, budgetMs, callType, client);
             recordChain(chain, callType, AppMetrics.OUTCOME_SUCCESS);
             return text;
         } catch (BudgetExhaustedException e) {
@@ -537,7 +548,8 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
         }
     }
 
-    private String callWithinBudget(List<String> models, Map<String, Object> body, int budgetMs, String callType) {
+    private String callWithinBudget(List<String> models, Map<String, Object> body, int budgetMs,
+                                    String callType, RestClient client) {
         Instant deadline = Instant.now().plusMillis(budgetMs);
         boolean firstAttempt = true;
         for (int round = 0; ; round++) {
@@ -552,7 +564,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                     firstAttempt = false;
                     Timer.Sample call = Timer.start(meters);
                     try {
-                        String text = callAndExtractText(model, body, key);
+                        String text = callAndExtractText(model, body, key, client);
                         recordCall(call, model, callType, AppMetrics.OUTCOME_SUCCESS);
                         return text;
                     } catch (HttpStatusCodeException e) {
@@ -675,8 +687,8 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
         }
     }
 
-    private String callAndExtractText(String model, Map<String, Object> body, String key) {
-        JsonNode response = restClient.post()
+    private String callAndExtractText(String model, Map<String, Object> body, String key, RestClient client) {
+        JsonNode response = client.post()
                 .uri("/v1beta/models/{model}:generateContent", model)
                 .header("x-goog-api-key", key)
                 .body(body)
