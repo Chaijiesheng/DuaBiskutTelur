@@ -5,6 +5,8 @@ import com.duabiskuttelur.model.AnalysisResponse;
 import com.duabiskuttelur.model.Badge;
 import com.duabiskuttelur.model.FoodItem;
 import com.duabiskuttelur.model.Totals;
+import com.duabiskuttelur.persistence.AchievementFacts;
+import com.duabiskuttelur.persistence.LegacyAchievementFacts;
 import com.duabiskuttelur.persistence.MealAnalysisEntity;
 import com.duabiskuttelur.persistence.MealAnalysisRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,12 +40,37 @@ class AchievementsServiceTest {
             return entries;
         }
 
-        @Override public List<MealAnalysisEntity> findTop50ByUserIdOrderByCreatedAtDesc(Long userId) { return List.of(); }
+        // The two projection queries the service actually reads, split the same
+        // way the real ones are: rows carrying the denormalized columns, and
+        // pre-V2 rows that only have result_json. These fixtures set
+        // result_json and leave the columns null, so they exercise the legacy
+        // path — which is the one worth keeping honest, since the fast path is
+        // a straight column read.
+        @Override
+        public List<AchievementFacts> findAchievementFacts(Long userId) {
+            return entries.stream()
+                    .filter(e -> e.getVegetableCount() != null)
+                    .map(AchievementsServiceTest::factsOf)
+                    .toList();
+        }
+
+        @Override
+        public List<LegacyAchievementFacts> findLegacyAchievementFacts(Long userId) {
+            return entries.stream()
+                    .filter(e -> e.getVegetableCount() == null)
+                    .map(AchievementsServiceTest::legacyFactsOf)
+                    .toList();
+        }
+
+        @Override public List<com.duabiskuttelur.model.HistoryEntry> findHistoryEntries(Long userId, org.springframework.data.domain.Pageable page) { return List.of(); }
         @Override public Optional<MealAnalysisEntity> findByIdAndUserId(Long id, Long userId) { return Optional.empty(); }
-        @Override public List<MealAnalysisEntity> findByUserIdAndCreatedAtBetween(Long userId, Instant start, Instant end) { return List.of(); }
+        @Override public List<com.duabiskuttelur.model.DailyMealFact> findDailyFacts(Long userId, Instant start, Instant end) { return List.of(); }
+        @Override public List<String> findResultJsonByIds(List<Long> ids) { return List.of(); }
 
         // Unused JpaRepository plumbing below — not exercised by these tests.
         @Override public <S extends MealAnalysisEntity> S save(S entity) { throw new UnsupportedOperationException(); }
+        @Override public int deleteByUserId(Long userId) { throw new UnsupportedOperationException(); }
+        @Override public List<com.duabiskuttelur.model.RecentMealPoint> findPointsSince(Long userId, Instant from) { throw new UnsupportedOperationException(); }
         @Override public <S extends MealAnalysisEntity> List<S> saveAll(Iterable<S> entities) { throw new UnsupportedOperationException(); }
         @Override public Optional<MealAnalysisEntity> findById(Long aLong) { throw new UnsupportedOperationException(); }
         @Override public boolean existsById(Long aLong) { throw new UnsupportedOperationException(); }
@@ -73,6 +100,27 @@ class AchievementsServiceTest {
         @Override public <S extends MealAnalysisEntity, R> R findBy(org.springframework.data.domain.Example<S> example, java.util.function.Function<org.springframework.data.repository.query.FluentQuery.FetchableFluentQuery<S>, R> queryFunction) { throw new UnsupportedOperationException(); }
         @Override public List<MealAnalysisEntity> findAll(org.springframework.data.domain.Sort sort) { throw new UnsupportedOperationException(); }
         @Override public org.springframework.data.domain.Page<MealAnalysisEntity> findAll(org.springframework.data.domain.Pageable pageable) { throw new UnsupportedOperationException(); }
+    }
+
+    private static AchievementFacts factsOf(MealAnalysisEntity e) {
+        return new AchievementFacts() {
+            @Override public Instant getCreatedAt() { return e.getCreatedAt(); }
+            @Override public String getGrade() { return e.getGrade(); }
+            @Override public String getSummary() { return e.getSummary(); }
+            @Override public Integer getVegetableCount() { return e.getVegetableCount(); }
+            @Override public Boolean getHasFruit() { return e.getHasFruit(); }
+            @Override public Boolean getBeverageOnly() { return e.getBeverageOnly(); }
+            @Override public Boolean getCoffeeOnly() { return e.getCoffeeOnly(); }
+        };
+    }
+
+    private static LegacyAchievementFacts legacyFactsOf(MealAnalysisEntity e) {
+        return new LegacyAchievementFacts() {
+            @Override public Instant getCreatedAt() { return e.getCreatedAt(); }
+            @Override public String getGrade() { return e.getGrade(); }
+            @Override public String getSummary() { return e.getSummary(); }
+            @Override public String getResultJson() { return e.getResultJson(); }
+        };
     }
 
     private static MealAnalysisEntity meal(LocalDateTime at, String grade, String summary, List<FoodItem> foods) {

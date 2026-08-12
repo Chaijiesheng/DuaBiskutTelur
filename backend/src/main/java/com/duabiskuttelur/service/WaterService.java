@@ -4,6 +4,7 @@ import com.duabiskuttelur.model.WaterTodayResponse;
 import com.duabiskuttelur.persistence.UserEntity;
 import com.duabiskuttelur.persistence.WaterEntity;
 import com.duabiskuttelur.persistence.WaterRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,19 +39,40 @@ public class WaterService {
         return new WaterTodayResponse(totalMl, targetFor(user));
     }
 
-    @Transactional
+    /**
+     * Deliberately not {@code @Transactional}: the insert below can legitimately
+     * lose a race against a concurrent first tap and throw, and a transaction
+     * marked rollback-only couldn't then retry inside itself. Each repository
+     * call carries its own transaction instead, so the recovery path starts
+     * clean. Nothing here needs the two steps to be atomic with each other —
+     * the database enforces one row per user per day (V6), and the delta itself
+     * is applied atomically by {@code adjustTotal}.
+     */
     public WaterTodayResponse adjust(UserEntity user, int deltaMl) {
-        WaterEntity entity = repository.findByUserIdAndDate(user.getId(), today())
-                .orElseGet(() -> {
-                    WaterEntity fresh = new WaterEntity();
-                    fresh.setUserId(user.getId());
-                    fresh.setDate(today());
-                    fresh.setTotalMl(0);
-                    return fresh;
-                });
-        entity.setTotalMl(Math.max(MIN_ML, Math.min(MAX_ML, entity.getTotalMl() + deltaMl)));
-        repository.save(entity);
-        return new WaterTodayResponse(entity.getTotalMl(), targetFor(user));
+        Long userId = user.getId();
+        LocalDate today = today();
+
+        if (repository.adjustTotal(userId, today, deltaMl, MIN_ML, MAX_ML) == 0) {
+            // First tap of the day — nothing to update yet. A concurrent first
+            // tap may insert before this one lands; uk_water_entry_user_date
+            // rejects whichever loses, and its delta is then applied to the
+            // winner's row rather than being silently dropped.
+            try {
+                WaterEntity fresh = new WaterEntity();
+                fresh.setUserId(userId);
+                fresh.setDate(today);
+                fresh.setTotalMl(clamp(deltaMl));
+                repository.saveAndFlush(fresh);
+                return new WaterTodayResponse(fresh.getTotalMl(), targetFor(user));
+            } catch (DataIntegrityViolationException lostTheInsertRace) {
+                repository.adjustTotal(userId, today, deltaMl, MIN_ML, MAX_ML);
+            }
+        }
+        return today(user);
+    }
+
+    private static int clamp(int totalMl) {
+        return Math.max(MIN_ML, Math.min(MAX_ML, totalMl));
     }
 
     @Transactional

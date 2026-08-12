@@ -4,11 +4,13 @@ import com.duabiskuttelur.model.AchievementsResponse;
 import com.duabiskuttelur.model.AnalysisResponse;
 import com.duabiskuttelur.model.Badge;
 import com.duabiskuttelur.model.FoodItem;
-import com.duabiskuttelur.persistence.MealAnalysisEntity;
+import com.duabiskuttelur.persistence.AchievementFacts;
+import com.duabiskuttelur.persistence.LegacyAchievementFacts;
 import com.duabiskuttelur.persistence.MealAnalysisRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -238,8 +240,7 @@ public class AchievementsService {
 
     public AchievementsResponse forUser(Long userId, String lang) {
         String normalizedLang = BADGE_I18N.containsKey(lang) ? lang : "en";
-        List<MealAnalysisEntity> entries = repository.findByUserIdOrderByCreatedAtDesc(userId);
-        Stats stats = computeStats(entries);
+        Stats stats = computeStats(loadMeals(userId));
 
         List<Badge> badges = CATALOG.stream()
                 .map(def -> toBadge(def, stats, normalizedLang))
@@ -262,12 +263,47 @@ public class AchievementsService {
                 unlocked ? description : null, unlocked ? def.xp() : null);
     }
 
-    private Stats computeStats(List<MealAnalysisEntity> entriesDesc) {
+    /**
+     * One row's worth of achievement input, however it had to be obtained.
+     * Rows written since V2 carry these as columns; older ones only have them
+     * inside result_json. Normalising both into one shape here keeps
+     * {@link #computeStats} from caring which query a row came from.
+     */
+    private record Meal(Instant createdAt, String grade, String summary,
+                         int vegetableCount, boolean hasFruit, boolean beverageOnly, boolean coffeeOnly) {
+    }
+
+    /**
+     * Reads the cheap projection for every row that has the denormalized
+     * columns, and pays for result_json only on the pre-V2 remainder. Ordering
+     * doesn't affect any statistic below (days are bucketed into sets, and the
+     * one order-sensitive check sorts its own day), but the merged list is kept
+     * newest-first to match what the queries and the old method promised.
+     */
+    private List<Meal> loadMeals(Long userId) {
+        List<Meal> meals = new ArrayList<>();
+        for (AchievementFacts f : repository.findAchievementFacts(userId)) {
+            meals.add(new Meal(f.getCreatedAt(), f.getGrade(), f.getSummary(),
+                    f.getVegetableCount() == null ? 0 : f.getVegetableCount(),
+                    Boolean.TRUE.equals(f.getHasFruit()),
+                    Boolean.TRUE.equals(f.getBeverageOnly()),
+                    Boolean.TRUE.equals(f.getCoffeeOnly())));
+        }
+        for (LegacyAchievementFacts f : repository.findLegacyAchievementFacts(userId)) {
+            MealFacts parsed = factsFromResultJson(f.getResultJson());
+            meals.add(new Meal(f.getCreatedAt(), f.getGrade(), f.getSummary(),
+                    parsed.vegetableCount(), parsed.hasFruit(), parsed.beverageOnly(), parsed.coffeeOnly()));
+        }
+        meals.sort(Comparator.comparing(Meal::createdAt).reversed());
+        return meals;
+    }
+
+    private Stats computeStats(List<Meal> entriesDesc) {
         ZoneId zone = ZoneId.systemDefault();
 
         TreeSet<LocalDate> allDays = new TreeSet<>();
         Map<LocalDate, Integer> mealsPerDay = new HashMap<>();
-        Map<LocalDate, List<MealAnalysisEntity>> byDay = new HashMap<>();
+        Map<LocalDate, List<Meal>> byDay = new HashMap<>();
         Set<LocalDate> fruitDays = new HashSet<>();
         Set<LocalDate> healthyDays = new HashSet<>();
         Set<LocalDate> breakfastDays = new HashSet<>();
@@ -285,8 +321,8 @@ public class AchievementsService {
         boolean liquidOnlyMealExists = false;
         boolean midnightMealLogged = false;
 
-        for (MealAnalysisEntity e : entriesDesc) {
-            LocalDateTime dt = e.getCreatedAt().atZone(zone).toLocalDateTime();
+        for (Meal e : entriesDesc) {
+            LocalDateTime dt = e.createdAt().atZone(zone).toLocalDateTime();
             LocalDate day = dt.toLocalDate();
             allDays.add(day);
             mealsPerDay.merge(day, 1, Integer::sum);
@@ -300,7 +336,7 @@ public class AchievementsService {
             if (hour >= 5 && hour < 11) {
                 breakfastDays.add(day);
             }
-            if ("A".equals(e.getGrade()) || "A+".equals(e.getGrade())) {
+            if ("A".equals(e.grade()) || "A+".equals(e.grade())) {
                 healthyDays.add(day);
             }
 
@@ -308,7 +344,7 @@ public class AchievementsService {
             // names, populated for every row since day one) instead of parsing
             // resultJson — same substring-search this file already relied on
             // for balancedEventually below.
-            String name = e.getSummary() == null ? "" : e.getSummary().toLowerCase(Locale.ROOT);
+            String name = e.summary() == null ? "" : e.summary().toLowerCase(Locale.ROOT);
             if (FoodKeywords.matchesAny(name, FoodKeywords.PIZZA)) {
                 pizzaMeals++;
             }
@@ -333,18 +369,17 @@ public class AchievementsService {
             // a distinct food-group count) — read from the columns
             // AnalysisService denormalizes at save time, falling back to
             // resultJson only for rows saved before those columns existed.
-            MealFacts facts = mealFacts(e);
-            vegetableOccurrences += facts.vegetableCount();
-            if (facts.vegetableCount() > 0) {
+            vegetableOccurrences += e.vegetableCount();
+            if (e.vegetableCount() > 0) {
                 vegetableMealCount++;
             }
-            if (facts.hasFruit()) {
+            if (e.hasFruit()) {
                 fruitDays.add(day);
             }
-            if (facts.coffeeOnly()) {
+            if (e.coffeeOnly()) {
                 coffeeOnlyMealExists = true;
             }
-            if (facts.beverageOnly()) {
+            if (e.beverageOnly()) {
                 liquidOnlyMealExists = true;
             }
         }
@@ -352,12 +387,12 @@ public class AchievementsService {
         int maxMealsInADay = mealsPerDay.values().stream().mapToInt(Integer::intValue).max().orElse(0);
 
         boolean balancedEventually = byDay.values().stream().anyMatch(dayEntries -> {
-            List<MealAnalysisEntity> sorted = dayEntries.stream()
-                    .sorted(Comparator.comparing(MealAnalysisEntity::getCreatedAt))
+            List<Meal> sorted = dayEntries.stream()
+                    .sorted(Comparator.comparing(Meal::createdAt))
                     .toList();
             boolean sawDessert = false;
-            for (MealAnalysisEntity e : sorted) {
-                String s = e.getSummary() == null ? "" : e.getSummary().toLowerCase(Locale.ROOT);
+            for (Meal e : sorted) {
+                String s = e.summary() == null ? "" : e.summary().toLowerCase(Locale.ROOT);
                 boolean isSalad = s.contains("salad");
                 if (isSalad && sawDessert) {
                     return true;
@@ -396,34 +431,12 @@ public class AchievementsService {
                 activeDaysLastYear);
     }
 
-    private List<FoodItem> parseFoods(MealAnalysisEntity e) {
-        if (e.getResultJson() == null) {
-            return List.of();
-        }
-        try {
-            AnalysisResponse response = mapper.readValue(e.getResultJson(), AnalysisResponse.class);
-            return response.foods() == null ? List.of() : response.foods();
-        } catch (Exception ex) {
-            return List.of();
-        }
-    }
-
     private record MealFacts(int vegetableCount, boolean hasFruit, boolean beverageOnly, boolean coffeeOnly) {
     }
 
-    /**
-     * Reads the columns AnalysisService denormalizes at save time; only rows
-     * saved before those columns existed (vegetableCount null) fall back to
-     * parsing resultJson the way this whole method used to, for every row.
-     */
-    private MealFacts mealFacts(MealAnalysisEntity e) {
-        if (e.getVegetableCount() != null) {
-            return new MealFacts(e.getVegetableCount(),
-                    Boolean.TRUE.equals(e.getHasFruit()),
-                    Boolean.TRUE.equals(e.getBeverageOnly()),
-                    Boolean.TRUE.equals(e.getCoffeeOnly()));
-        }
-        List<FoodItem> foods = parseFoods(e);
+    /** Recovers the denormalized facts from a pre-V2 row's stored analysis. */
+    private MealFacts factsFromResultJson(String resultJson) {
+        List<FoodItem> foods = parseFoods(resultJson);
         int vegetableCount = 0;
         boolean hasFruit = false;
         boolean beverageOnly = !foods.isEmpty();
@@ -444,6 +457,18 @@ public class AchievementsService {
             }
         }
         return new MealFacts(vegetableCount, hasFruit, beverageOnly, coffeeOnly);
+    }
+
+    private List<FoodItem> parseFoods(String resultJson) {
+        if (resultJson == null) {
+            return List.of();
+        }
+        try {
+            AnalysisResponse response = mapper.readValue(resultJson, AnalysisResponse.class);
+            return response.foods() == null ? List.of() : response.foods();
+        } catch (Exception ex) {
+            return List.of();
+        }
     }
 
     /**

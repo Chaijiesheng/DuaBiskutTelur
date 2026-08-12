@@ -98,14 +98,19 @@ function wrapToLines(ctx, text, maxWidth, maxLines) {
   return lines
 }
 
-function drawLeaderRow(ctx, label, value, y, left, right) {
+function drawLeaderRow(ctx, label, value, y, left, right, labelColour) {
   ctx.textBaseline = 'alphabetic'
-  ctx.font = `700 39px ${FONT}`
+  // The label may be CJK (the menu tier names), which the monospace stack has
+  // no glyphs for — measure and draw it in whichever font is about to render
+  // it, or the dot leader starts in the wrong place.
+  ctx.font = labelColour ? `700 39px ${LABEL_FONT}` : `700 39px ${FONT}`
   ctx.textAlign = 'left'
-  ctx.fillStyle = INK
+  ctx.fillStyle = labelColour ?? INK
   ctx.fillText(label, left, y)
   const labelEnd = left + ctx.measureText(label).width
 
+  ctx.font = `700 39px ${FONT}`
+  ctx.fillStyle = INK
   ctx.textAlign = 'right'
   ctx.fillText(value, right, y)
   const valueStart = right - ctx.measureText(value).width
@@ -145,14 +150,16 @@ function drawBarcode(ctx, x, y, w, h) {
  * a torn bottom edge, a rotated ink-stamp grade, dot-leader nutrition line
  * items, a highlight note, and a decorative barcode + tracking number.
  */
-export async function buildShareCard({ result, imageSource, brandTitle, shareText, barcodeLabel }) {
-  const { grade, score, totals, highlights, source } = result
 
-  const canvas = document.createElement('canvas')
-  canvas.width = WIDTH
-  canvas.height = HEIGHT
-  const ctx = canvas.getContext('2d')
+// The tier labels are Chinese (see tierMeta.js) and FONT is a monospace stack —
+// Consolas and Liberation Mono carry no CJK glyphs. Canvas silently falls back
+// to whatever the system has, unlike the PDF exporter which just drops them
+// (outstanding item 6), but relying on that fallback for the one thing the menu
+// card is about would be careless. Labels get a stack that actually has CJK.
+const LABEL_FONT = 'system-ui, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif'
 
+/** Paper, clip, brand header and the rule under it — shared by both cards. */
+function drawTicketChrome(ctx, brandTitle, ticketNumber) {
   ctx.save()
   ctx.beginPath()
   ticketClipPath(ctx)
@@ -161,47 +168,82 @@ export async function buildShareCard({ result, imageSource, brandTitle, shareTex
   ctx.fillStyle = PAPER
   ctx.fillRect(0, 0, WIDTH, HEIGHT)
 
-  // Header: brand + zero-padded "ticket number" derived from the score.
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = INK
   ctx.font = `700 37px ${FONT}`
   ctx.textAlign = 'left'
   ctx.fillText(brandTitle.toUpperCase(), MARGIN_X, 81)
   ctx.textAlign = 'right'
-  ctx.fillText(`NO. ${String(Math.round(score)).padStart(4, '0')}`, WIDTH - MARGIN_X, 81)
+  ctx.fillText(ticketNumber, WIDTH - MARGIN_X, 81)
 
+  dashedRule(ctx, 108)
+}
+
+function dashedRule(ctx, y) {
   ctx.strokeStyle = 'rgba(43, 42, 40, 0.35)'
   ctx.lineWidth = 3
   ctx.setLineDash([5, 8])
   ctx.beginPath()
-  ctx.moveTo(MARGIN_X, 108)
-  ctx.lineTo(WIDTH - MARGIN_X, 108)
+  ctx.moveTo(MARGIN_X, y)
+  ctx.lineTo(WIDTH - MARGIN_X, y)
   ctx.stroke()
   ctx.setLineDash([])
+}
+
+/** The dashed-frame photo square, with an emoji tile when there is no image. */
+function drawPhotoSquare(ctx, img, fallbackEmoji, top, size) {
+  ctx.save()
+  ctx.strokeStyle = 'rgba(43, 42, 40, 0.4)'
+  ctx.lineWidth = 7
+  ctx.setLineDash([10, 8])
+  ctx.strokeRect(MARGIN_X, top, size, size)
+  ctx.setLineDash([])
+  if (img) {
+    ctx.filter = 'sepia(0.2) contrast(1.05)'
+    drawCover(ctx, img, MARGIN_X, top, size, size)
+    ctx.filter = 'none'
+  } else {
+    ctx.fillStyle = '#e8ddc8'
+    ctx.fillRect(MARGIN_X, top, size, size)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = '160px system-ui, sans-serif'
+    ctx.fillText(fallbackEmoji, MARGIN_X + size / 2, top + size / 2)
+  }
+  ctx.restore()
+}
+
+/** Barcode strip and serial line at the foot of the ticket. */
+function drawTicketFooter(ctx, serial) {
+  drawBarcode(ctx, MARGIN_X, 1073, WIDTH - MARGIN_X * 2, 115)
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = INK
+  ctx.font = `600 34px ${FONT}`
+  ctx.fillText(serial, MARGIN_X, 1256)
+}
+
+function today() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
+}
+
+export async function buildShareCard({ result, imageSource, brandTitle, shareText, barcodeLabel }) {
+  const { grade, score, totals, highlights, source } = result
+
+  const canvas = document.createElement('canvas')
+  canvas.width = WIDTH
+  canvas.height = HEIGHT
+  const ctx = canvas.getContext('2d')
+
+  drawTicketChrome(ctx, brandTitle, `NO. ${String(Math.round(score)).padStart(4, '0')}`)
 
   // Photo (or a fallback tile when there's none — barcode results never have one).
   const photoTop = 216
   const photoSize = 367
   const img = await loadImage(imageSource)
-  ctx.save()
-  ctx.strokeStyle = 'rgba(43, 42, 40, 0.4)'
-  ctx.lineWidth = 7
-  ctx.setLineDash([10, 8])
-  ctx.strokeRect(MARGIN_X, photoTop, photoSize, photoSize)
-  ctx.setLineDash([])
-  if (img) {
-    ctx.filter = 'sepia(0.2) contrast(1.05)'
-    drawCover(ctx, img, MARGIN_X, photoTop, photoSize, photoSize)
-    ctx.filter = 'none'
-  } else {
-    ctx.fillStyle = '#e8ddc8'
-    ctx.fillRect(MARGIN_X, photoTop, photoSize, photoSize)
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.font = '160px system-ui, sans-serif'
-    ctx.fillText(source === 'barcode' ? '🔖' : '🍽️', MARGIN_X + photoSize / 2, photoTop + photoSize / 2)
-  }
-  ctx.restore()
+  drawPhotoSquare(ctx, img, source === 'barcode' ? '🔖' : '🍽️', photoTop, photoSize)
 
   // Rotated ink stamp overlapping the photo's bottom-right corner.
   const stampSize = 238
@@ -250,14 +292,7 @@ export async function buildShareCard({ result, imageSource, brandTitle, shareTex
 
   // Highlight note, up to two lines, with its own dashed rule above it.
   if (highlights?.[0]) {
-    ctx.strokeStyle = 'rgba(43, 42, 40, 0.35)'
-    ctx.lineWidth = 3
-    ctx.setLineDash([5, 8])
-    ctx.beginPath()
-    ctx.moveTo(MARGIN_X, noteBottom - 27)
-    ctx.lineTo(WIDTH - MARGIN_X, noteBottom - 27)
-    ctx.stroke()
-    ctx.setLineDash([])
+    dashedRule(ctx, noteBottom - 27)
 
     ctx.textAlign = 'left'
     ctx.textBaseline = 'alphabetic'
@@ -267,15 +302,7 @@ export async function buildShareCard({ result, imageSource, brandTitle, shareTex
     lines.forEach((line, i) => ctx.fillText(line, MARGIN_X, noteBottom + i * 46))
   }
 
-  drawBarcode(ctx, MARGIN_X, 1073, WIDTH - MARGIN_X * 2, 115)
-
-  const d = new Date()
-  const pad = (n) => String(n).padStart(2, '0')
-  const ticketNo = `${Math.round(score)}${grade.replace('+', '')}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
-  ctx.textAlign = 'left'
-  ctx.fillStyle = INK
-  ctx.font = `600 34px ${FONT}`
-  ctx.fillText(ticketNo, MARGIN_X, 1256)
+  drawTicketFooter(ctx, `${Math.round(score)}${grade.replace('+', '')}-${today()}`)
 
   ctx.restore() // lift the ticket clip
 
@@ -290,4 +317,70 @@ export function downloadBlob(blob, filename) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/**
+ * The menu-scan equivalent: the same ticket, ranking dishes instead of grading
+ * a plate.
+ *
+ * A menu result has no score, no grade and no totals, so none of the meal
+ * card's body applies — what it has is five tiers of dishes. The chrome is
+ * shared (drawTicketChrome / drawPhotoSquare / drawTicketFooter) so the two
+ * cards cannot drift into looking like they came from different apps.
+ *
+ * @param tierRows [{ label, colour, count, dishes: string[] }], best tier first
+ */
+export async function buildMenuShareCard({
+  tierRows, dishCount, imageSource, brandTitle, shareText, dishCountLabel,
+}) {
+  const canvas = document.createElement('canvas')
+  canvas.width = WIDTH
+  canvas.height = HEIGHT
+  const ctx = canvas.getContext('2d')
+
+  drawTicketChrome(ctx, brandTitle, `NO. ${String(dishCount).padStart(4, '0')}`)
+
+  const photoTop = 216
+  const photoSize = 367
+  const img = await loadImage(imageSource)
+  drawPhotoSquare(ctx, img, '📋', photoTop, photoSize)
+
+  // One leader row per tier, right of the photo — the same five-row rhythm the
+  // meal card uses for its nutrition lines, so both read as the same object.
+  const linesRight = WIDTH - MARGIN_X
+  const linesLeft = linesRight - 497
+  tierRows.slice(0, 5).forEach((row, i) => {
+    drawLeaderRow(ctx, row.label, String(row.count), 260 + i * 130, linesLeft, linesRight, row.colour)
+  })
+
+  const noteTop = 864
+  dashedRule(ctx, noteTop - 27)
+
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = INK
+  ctx.font = `500 32px ${FONT}`
+  ctx.fillText(dishCountLabel.toUpperCase(), MARGIN_X, noteTop)
+
+  // Name the dishes in the best non-empty tier. A tier list with no dishes on it
+  // is just five numbers, and the names are what a friend actually reads.
+  const best = tierRows.find((row) => row.dishes.length > 0)
+  if (best) {
+    ctx.font = `700 40px ${LABEL_FONT}`
+    ctx.fillStyle = best.colour
+    ctx.fillText(best.label, MARGIN_X, noteTop + 62)
+
+    ctx.fillStyle = INK
+    ctx.font = `500 33px ${FONT}`
+    best.dishes.slice(0, 3).forEach((name, i) => {
+      ctx.fillText(truncateToWidth(ctx, `- ${name}`, WIDTH - MARGIN_X * 2), MARGIN_X, noteTop + 116 + i * 44)
+    })
+  }
+
+  drawTicketFooter(ctx, `MENU${String(dishCount).padStart(2, '0')}-${today()}`)
+
+  ctx.restore()
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  return { blob, shareText }
 }

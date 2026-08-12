@@ -58,7 +58,8 @@ public class BarcodeLookupService {
         List<FoodItem> foods = List.of(item);
         Totals totals = Totals.of(foods);
         int calorieBudget = (int) Math.round(scoringService.effectiveBudget(user != null ? user.getDailyBudget() : null));
-        ScoreResult score = scoringService.score(foods, totals, calorieBudget);
+        ScoreResult score = scoringService.score(foods, totals, calorieBudget,
+                user != null ? user.getGoal() : null);
 
         String goal = user != null ? user.getGoal() : null;
         FeedbackService.RemainingBudget remaining = user != null ? analysisService.remainingBudgetFor(user) : null;

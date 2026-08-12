@@ -87,7 +87,7 @@ export default function WeightTrendCard({ goal }) {
                   {delta} kg
                 </p>
                 <p
-                  className={`text-[11px] font-semibold ${
+                  className={`text-xs font-semibold ${
                     onTrack ? 'text-grade-aplus dark:text-green-400' : 'text-amber-600 dark:text-amber-400'
                   }`}
                 >
@@ -99,7 +99,7 @@ export default function WeightTrendCard({ goal }) {
                 {last.avgWeightKg} kg
               </p>
             )}
-            <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{t('weightTrend.window', weeks.length)}</p>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{t('weightTrend.window', weeks.length)}</p>
           </div>
         </div>
       )}

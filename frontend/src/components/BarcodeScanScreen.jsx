@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import { lookupBarcodeProduct } from '../api.js'
+import { isValidBarcode, normalizeBarcode } from '../barcodeInput.js'
 
 const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128']
 // Matches the backend's sanity ceiling — a real order is a few packages, not a pallet.
@@ -97,7 +98,7 @@ export default function BarcodeScanScreen({ onConfirm, onCancel, onTakePhotoInst
           if (cancelled) return
           const reader = new BrowserMultiFormatReader()
           zxingReaderRef.current = reader
-          reader.decodeFromVideoElement(videoRef.current, (result, err) => {
+          reader.decodeFromVideoElement(videoRef.current, (result) => {
             if (result && !cancelled) {
               handleDetected(result.getText())
             }
@@ -220,7 +221,17 @@ export default function BarcodeScanScreen({ onConfirm, onCancel, onTakePhotoInst
 
   return (
     <div className="relative -mx-4 -mt-2 h-[70vh] overflow-hidden bg-slate-900">
-      <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
+      {/* Named, and marked decorative for reading order: the live camera feed
+          conveys nothing to a screen reader, and an unnamed <video> is
+          announced as a bare media element with no clue what it is for. The
+          usable path for a non-visual user is ManualCodeEntry below. */}
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        aria-label={t('barcodeScan.cameraPreview')}
+        className="h-full w-full object-cover"
+      />
 
       <div className="absolute inset-x-8 top-1/2 h-28 -translate-y-1/2 rounded-xl">
         <div className="absolute -left-0.5 -top-0.5 h-5 w-5 rounded-tl-lg border-l-4 border-t-4 border-grade-aplus" />
@@ -233,6 +244,7 @@ export default function BarcodeScanScreen({ onConfirm, onCancel, onTakePhotoInst
       <p className="absolute inset-x-0 top-[calc(50%+70px)] text-center text-xs text-slate-300">{t('barcodeScan.hint')}</p>
 
       <div className="absolute inset-x-0 bottom-6 flex flex-col items-center gap-2">
+        <ManualCodeEntry onSubmit={setCode} />
         <button onClick={onTakePhotoInstead} className="text-xs text-slate-300 underline underline-offset-2">
           {t('barcodeScan.fallback')}
         </button>
@@ -241,6 +253,81 @@ export default function BarcodeScanScreen({ onConfirm, onCancel, onTakePhotoInst
         </button>
       </div>
     </div>
+  )
+}
+
+/**
+ * Type the digits instead of aiming a camera at them.
+ *
+ * Without this the scanner is unusable without sight — aligning a package
+ * inside a viewfinder you cannot see is not a task that has an accessible
+ * version. It also covers a scratched label, a cracked lens, and a phone with
+ * no working camera, so it is not only an accessibility path.
+ *
+ * The digits go through the same `setCode` the detector calls, so the product
+ * lookup, the servings prompt and the history write are all the identical flow
+ * — nothing here is a second, less-tested route to the same place.
+ */
+function ManualCodeEntry({ onSubmit }) {
+  const { t } = useLanguage()
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState('')
+  const inputRef = useRef(null)
+
+  // Moving focus here is the fix, not a convenience: the button that opened
+  // this form unmounts on the same render, and focus left behind on a removed
+  // element falls to <body>. A screen reader user would activate "type it
+  // instead" and land nowhere. Done with a ref rather than autoFocus so it is
+  // scoped to this deliberate reveal instead of firing on mount generally.
+  useEffect(() => {
+    if (open) inputRef.current?.focus()
+  }, [open])
+  const digits = normalizeBarcode(value)
+  const valid = isValidBarcode(value)
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="text-xs text-slate-300 underline underline-offset-2"
+      >
+        {t('barcodeScan.enterManually')}
+      </button>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (valid) onSubmit(digits)
+      }}
+      className="flex items-center gap-2 rounded-xl bg-white/95 px-3 py-2 dark:bg-slate-800/95"
+    >
+      <label htmlFor="manual-barcode" className="sr-only">
+        {t('barcodeScan.enterManuallyLabel')}
+      </label>
+      <input
+        id="manual-barcode"
+        // Numeric keypad without the spinner and value coercion `type=number`
+        // brings; a barcode is a string of digits, not a quantity.
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={t('barcodeScan.enterManuallyPlaceholder')}
+        className="w-40 bg-transparent text-sm text-slate-900 outline-none dark:text-slate-100"
+      />
+      <button
+        type="submit"
+        disabled={!valid}
+        className="rounded-lg bg-grade-aplus px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+      >
+        {t('barcodeScan.enterManuallySubmit')}
+      </button>
+    </form>
   )
 }
 

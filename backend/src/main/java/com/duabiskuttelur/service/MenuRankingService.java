@@ -13,13 +13,20 @@ import com.duabiskuttelur.persistence.MenuScanEntity;
 import com.duabiskuttelur.persistence.MenuScanRepository;
 import com.duabiskuttelur.persistence.UserEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -55,6 +62,7 @@ public class MenuRankingService {
     private final MenuScanRepository repository;
     private final AppProperties props;
     private final ObjectMapper mapper;
+    private final ExecutorService resolutionPool;
 
     public MenuRankingService(VisionAnalysisClient visionClient, ScoringService scoringService,
                                AnalysisService analysisService, ThumbnailService thumbnailService,
@@ -66,6 +74,21 @@ public class MenuRankingService {
         this.repository = repository;
         this.props = props;
         this.mapper = mapper;
+
+        AtomicInteger threadNumber = new AtomicInteger();
+        this.resolutionPool = Executors.newFixedThreadPool(
+                Math.max(1, props.getMenuResolveParallelism()),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "menu-resolve-" + threadNumber.incrementAndGet());
+                    // Daemon so a hung third-party call can never hold up JVM shutdown.
+                    thread.setDaemon(true);
+                    return thread;
+                });
+    }
+
+    @PreDestroy
+    void shutdownResolutionPool() {
+        resolutionPool.shutdownNow();
     }
 
     public MenuRankingResponse rank(byte[] imageBytes, String mediaType, UserEntity user, String lang) {
@@ -82,7 +105,8 @@ public class MenuRankingService {
         List<MenuDish> dishes = new ArrayList<>();
         for (FoodItem item : identified.foods()) {
             List<FoodItem> single = List.of(item);
-            ScoringService.ScoreResult score = scoringService.score(single, Totals.of(single), calorieBudget);
+            ScoringService.ScoreResult score = scoringService.score(single, Totals.of(single), calorieBudget,
+                    user != null ? user.getGoal() : null);
             dishes.add(new MenuDish(item.name(), item.estimatedPortion(),
                     score.score(), score.grade(), TierMapping.tierFor(score.grade()), item));
         }
@@ -105,11 +129,49 @@ public class MenuRankingService {
         if (truncated) {
             identified = identified.subList(0, MAX_DISHES);
         }
-        List<FoodItem> foods = new ArrayList<>();
-        for (IdentifiedFood cf : identified) {
-            foods.add(analysisService.resolveNutrition(cf));
+        return new Result(resolveInParallel(identified), truncated);
+    }
+
+    /**
+     * Resolves every dish concurrently. Each resolution is an independent USDA
+     * lookup (or a cache hit), so running them one after another meant a menu's
+     * latency was the sum of up to 60 round trips rather than the longest one —
+     * enough, on a cold menu, to outlast the gateway timeout by itself.
+     *
+     * <p>Results are collected in submission order, so the tier list still
+     * reflects the order dishes were read off the menu rather than whichever
+     * lookup happened to finish first.
+     *
+     * <p>pinPortion is true throughout: a menu is just names, with no plate to
+     * size a portion from, so the model's guess is replayed from the cache
+     * rather than re-rolled — otherwise a dish could change tier between two
+     * scans of the same menu.
+     */
+    private List<FoodItem> resolveInParallel(List<IdentifiedFood> identified) {
+        List<Future<FoodItem>> pending = identified.stream()
+                .map(cf -> resolutionPool.submit(() -> analysisService.resolveNutrition(cf, true)))
+                .toList();
+
+        List<FoodItem> foods = new ArrayList<>(pending.size());
+        try {
+            for (Future<FoodItem> future : pending) {
+                foods.add(future.get());
+            }
+        } catch (InterruptedException e) {
+            pending.forEach(f -> f.cancel(true));
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while resolving menu dishes", e);
+        } catch (ExecutionException e) {
+            pending.forEach(f -> f.cancel(true));
+            // Unwrap so the controller's handlers still see the original type —
+            // ProviderBusyException in particular has to stay a 503, not a 500.
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException("Failed to resolve a menu dish", cause);
         }
-        return new Result(foods, truncated);
+        return foods;
     }
 
     private List<TierGroup> groupIntoTiers(List<MenuDish> dishes) {
@@ -144,10 +206,8 @@ public class MenuRankingService {
     }
 
     public List<MenuHistoryEntry> history(Long userId) {
-        return repository.findTop50ByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(e -> new MenuHistoryEntry(e.getId(), e.getCreatedAt(), e.getDishCount(),
-                        e.isTruncated(), e.getSummary(), e.getThumbnail()))
-                .toList();
+        return repository.findHistoryEntries(userId,
+                PageRequest.of(0, AnalysisService.HISTORY_PAGE_SIZE));
     }
 
     /** Reopens a past menu scan. Scoped to the owning user so one user can't view another's history. */

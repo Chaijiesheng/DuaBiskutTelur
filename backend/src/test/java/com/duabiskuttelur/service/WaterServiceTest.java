@@ -5,6 +5,7 @@ import com.duabiskuttelur.persistence.UserEntity;
 import com.duabiskuttelur.persistence.WaterEntity;
 import com.duabiskuttelur.persistence.WaterRepository;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
@@ -77,9 +78,39 @@ class WaterServiceTest {
         assertThrows(ResponseStatusException.class, () -> WaterService.validateTarget(10_000));
     }
 
-    /** In-memory fake so we don't need a real Spring context. */
+    /**
+     * Two taps racing on the first drink of the day both used to find no row and
+     * both insert one, after which findByUserIdAndDate matched two rows for an
+     * Optional and every water endpoint threw for the rest of the day. The
+     * unique constraint (V6) now rejects the losing insert; this asserts the
+     * loser recovers by applying its delta to the winner's row instead of
+     * dropping the tap or blowing up.
+     */
+    @Test
+    void adjustRecoversWhenItLosesTheFirstTapInsertRace() {
+        FakeRepository repository = new FakeRepository();
+        WaterService service = new WaterService(repository);
+        UserEntity u = user(1L, null);
+
+        // The competing request lands its own 250ml row in the window between
+        // our adjustTotal finding nothing and our insert reaching the database.
+        repository.beforeInsert = () -> repository.insertDirectly(1L, 250);
+
+        WaterTodayResponse result = service.adjust(u, 500);
+
+        assertEquals(750, result.totalMl(), "the losing tap's delta must land on the winner's row");
+        assertEquals(1, repository.entries.size(), "the constraint must leave exactly one row for the day");
+    }
+
+    /**
+     * In-memory fake so we don't need a real Spring context. Enforces
+     * uk_water_entry_user_date the way the database does, so the service's
+     * race-recovery path is exercised rather than assumed.
+     */
     private static class FakeRepository implements WaterRepository {
         final List<WaterEntity> entries = new ArrayList<>();
+        /** Hook for simulating a competing request inserting first. */
+        Runnable beforeInsert = () -> { };
 
         @Override
         public Optional<WaterEntity> findByUserIdAndDate(Long userId, LocalDate date) {
@@ -88,11 +119,43 @@ class WaterServiceTest {
                     .findFirst();
         }
 
+        @Override
+        public int adjustTotal(Long userId, LocalDate date, int deltaMl, int minMl, int maxMl) {
+            return findByUserIdAndDate(userId, date)
+                    .map(e -> {
+                        e.setTotalMl(Math.max(minMl, Math.min(maxMl, e.getTotalMl() + deltaMl)));
+                        return 1;
+                    })
+                    .orElse(0);
+        }
+
+        void insertDirectly(Long userId, int totalMl) {
+            WaterEntity e = new WaterEntity();
+            e.setUserId(userId);
+            e.setDate(LocalDate.now(ZoneId.systemDefault()));
+            e.setTotalMl(totalMl);
+            entries.add(e);
+        }
+
+        @Override public <S extends WaterEntity> S saveAndFlush(S entity) {
+            beforeInsert.run();
+            beforeInsert = () -> { };
+            boolean duplicate = entries.stream().anyMatch(e -> e != entity
+                    && e.getUserId().equals(entity.getUserId())
+                    && entity.getDate().equals(e.getDate()));
+            if (duplicate) {
+                throw new DataIntegrityViolationException("uk_water_entry_user_date");
+            }
+            return save(entity);
+        }
+
         @Override public <S extends WaterEntity> S save(S entity) {
             entries.removeIf(e -> e == entity);
             entries.add(entity);
             return entity;
         }
+        @Override public int deleteByUserId(Long userId) { throw new UnsupportedOperationException(); }
+        @Override public List<WaterEntity> findByUserIdOrderByDateDesc(Long userId) { throw new UnsupportedOperationException(); }
         @Override public <S extends WaterEntity> List<S> saveAll(Iterable<S> entities) { throw new UnsupportedOperationException(); }
         @Override public Optional<WaterEntity> findById(Long aLong) { throw new UnsupportedOperationException(); }
         @Override public boolean existsById(Long aLong) { throw new UnsupportedOperationException(); }
@@ -105,7 +168,6 @@ class WaterServiceTest {
         @Override public void deleteAll(Iterable<? extends WaterEntity> entities) { throw new UnsupportedOperationException(); }
         @Override public void deleteAll() { throw new UnsupportedOperationException(); }
         @Override public void flush() { throw new UnsupportedOperationException(); }
-        @Override public <S extends WaterEntity> S saveAndFlush(S entity) { throw new UnsupportedOperationException(); }
         @Override public <S extends WaterEntity> List<S> saveAllAndFlush(Iterable<S> entities) { throw new UnsupportedOperationException(); }
         @Override public void deleteAllInBatch(Iterable<WaterEntity> entities) { throw new UnsupportedOperationException(); }
         @Override public void deleteAllByIdInBatch(Iterable<Long> longs) { throw new UnsupportedOperationException(); }

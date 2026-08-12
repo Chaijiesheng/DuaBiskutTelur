@@ -40,8 +40,64 @@ public class AppProperties {
     private String usdaBaseUrl = "https://api.nal.usda.gov";
     private String openFoodFactsBaseUrl = "https://world.openfoodfacts.org";
     private int connectTimeoutMs = 10_000;
-    private int readTimeoutMs = 120_000;
-    private int usdaRetries = 2;
+    private int readTimeoutMs = 30_000;
+    private int usdaRetries = 1;
+
+    /**
+     * Read timeout for USDA specifically. It used to share readTimeoutMs with
+     * Gemini, which is sized for a model composing a paragraph — wildly
+     * generous for a keyword search that normally answers in well under a
+     * second, and the dominant term in how long a cold menu scan can take
+     * (one lookup per dish, up to 60 of them).
+     */
+    private int usdaReadTimeoutMs = 5_000;
+
+    /**
+     * How many dishes on one menu are resolved at a time. Menu scans used to
+     * resolve strictly one after another, so a cold 60-dish menu was 60 serial
+     * round trips and could outlast the gateway timeout on its own. Bounded
+     * rather than unlimited: 60 simultaneous lookups would be a burst against
+     * a rate-limited third party and a burst of threads here.
+     */
+    private int menuResolveParallelism = 8;
+
+    /**
+     * Total wall-clock ceiling for one Gemini call chain — every model x key
+     * attempt plus the backoff sleeps between rounds, not a per-call timeout
+     * (that's readTimeoutMs). Without a ceiling the retry schedule multiplies
+     * out to roughly 18 minutes of a held request thread against a provider
+     * that accepts connections but never answers, long after the gateway has
+     * already given up on the client.
+     */
+    private int geminiBudgetMs = 60_000;
+
+    /**
+     * Same ceiling for the feedback call, deliberately smaller: FeedbackService
+     * falls back to deterministic rule-based text when the call fails, so a
+     * struggling provider shouldn't get the full vision budget a second time
+     * for prose that has a working substitute. Vision + feedback must together
+     * stay inside the gateway's own read timeout.
+     */
+    private int geminiFeedbackBudgetMs = 25_000;
+
+    /**
+     * How many Gemini calls may be in flight at once across the whole JVM. The
+     * per-call budget bounds how long one request holds a servlet thread, but
+     * not how many do so simultaneously — during a provider slowdown a large
+     * enough burst still drains Tomcat's pool and takes unrelated endpoints
+     * (sign-in, history, dashboards) down with it. Callers past this limit are
+     * shed as ANALYZER_BUSY within a second instead of joining the queue, so
+     * the pool stays available for everything that isn't waiting on Gemini.
+     */
+    private int geminiMaxConcurrentCalls = 16;
+
+    /**
+     * Pin each dish's resolved nutrition to its first resolution
+     * (NutritionCacheService) so repeat scans of the same dish can't re-roll the
+     * USDA-match/model-estimate lottery. Turn off to force every scan to resolve
+     * afresh — e.g. when a batch of entries was pinned during a USDA outage.
+     */
+    private boolean nutritionCacheEnabled = true;
 
     /** Configured Gemini keys with blanks removed, in priority order. */
     public List<String> nonBlankGeminiApiKeys() {
@@ -80,4 +136,16 @@ public class AppProperties {
     public void setReadTimeoutMs(int v) { this.readTimeoutMs = v; }
     public int getUsdaRetries() { return usdaRetries; }
     public void setUsdaRetries(int v) { this.usdaRetries = v; }
+    public int getUsdaReadTimeoutMs() { return usdaReadTimeoutMs; }
+    public void setUsdaReadTimeoutMs(int v) { this.usdaReadTimeoutMs = v; }
+    public int getMenuResolveParallelism() { return menuResolveParallelism; }
+    public void setMenuResolveParallelism(int v) { this.menuResolveParallelism = v; }
+    public int getGeminiBudgetMs() { return geminiBudgetMs; }
+    public void setGeminiBudgetMs(int v) { this.geminiBudgetMs = v; }
+    public int getGeminiFeedbackBudgetMs() { return geminiFeedbackBudgetMs; }
+    public void setGeminiFeedbackBudgetMs(int v) { this.geminiFeedbackBudgetMs = v; }
+    public int getGeminiMaxConcurrentCalls() { return geminiMaxConcurrentCalls; }
+    public void setGeminiMaxConcurrentCalls(int v) { this.geminiMaxConcurrentCalls = v; }
+    public boolean isNutritionCacheEnabled() { return nutritionCacheEnabled; }
+    public void setNutritionCacheEnabled(boolean v) { this.nutritionCacheEnabled = v; }
 }

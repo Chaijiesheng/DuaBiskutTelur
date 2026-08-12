@@ -58,7 +58,7 @@ export default function MacroDonut({ totals, goal }) {
         </svg>
         <ul className="w-full space-y-2 text-sm">
           {targets && (
-            <li className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            <li className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               {t('macroDonut.comparedWithGoal')}
             </li>
           )}

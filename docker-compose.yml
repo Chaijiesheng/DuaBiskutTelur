@@ -15,23 +15,62 @@ services:
       # buckets) is computed from ZoneId.systemDefault() — without this the
       # container defaults to UTC and the day rolls over at 8am local time.
       TZ: Asia/Kuala_Lumpur
+      # Without a limit the JVM sizes its heap from the *host's* RAM, not the
+      # container's, so the memory cap below would be enforced by the kernel
+      # killing the process rather than by the JVM collecting. 60% leaves room
+      # for what the heap setting doesn't cover — thread stacks (Tomcat runs up
+      # to 200), metaspace, code cache and direct buffers. ExitOnOutOfMemoryError
+      # because a JVM that has run out of heap does not usefully recover, and
+      # `restart: unless-stopped` above will bring back a clean one.
+      JAVA_TOOL_OPTIONS: >-
+        -XX:MaxRAMPercentage=60
+        -XX:+ExitOnOutOfMemoryError
     volumes:
       - backend-data:/app/data
     expose:
       - "8080"
     ports:
       - "127.0.0.1:9092:9092"
+    deploy:
+      resources:
+        limits:
+          # One bad request should cost this container, not the whole VM. Raise
+          # together with MaxRAMPercentage, never separately.
+          memory: 1g
+          cpus: "1.5"
+    logging:
+      # The default json-file driver has no bound. On a single VM with no
+      # monitoring, a disk filled by container logs is the most likely way this
+      # app goes down, and it would look like a mystery rather than a full disk.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     build: ./frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        # Wait for the backend to actually answer, not merely to have started —
+        # nginx resolves `backend` at startup and a proxied request arriving
+        # before Flyway has finished would 502.
+        condition: service_healthy
     ports:
       # Bound to loopback only — the host's native nginx (which may serve
       # other sites on the same machine) reverse-proxies the public domain
       # here. Bind "80:80" instead if this is the only site on the host.
       - "127.0.0.1:8081:80"
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   backend-data:

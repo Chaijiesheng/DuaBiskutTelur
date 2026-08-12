@@ -184,7 +184,7 @@ export default function WaterTrackerCard({ isVisitor }) {
         </h2>
         <button
           onClick={() => setPickingTarget((v) => !v)}
-          className="text-[11px] font-medium text-slate-500 dark:text-slate-400"
+          className="text-xs font-medium text-slate-500 dark:text-slate-400"
         >
           {targetMl}ml →
         </button>
@@ -196,7 +196,7 @@ export default function WaterTrackerCard({ isVisitor }) {
             <button
               key={preset}
               onClick={() => changeTarget(preset)}
-              className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+              className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${
                 preset === targetMl
                   ? 'bg-grade-aplus text-white'
                   : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
@@ -223,7 +223,7 @@ export default function WaterTrackerCard({ isVisitor }) {
         <p className="mt-2.5 text-center text-sm font-semibold text-grade-aplus dark:text-green-400">{celebration}</p>
       ) : (
         goalReached && (
-          <p className="mt-2.5 text-center text-[11px] font-semibold text-grade-aplus dark:text-green-400">
+          <p className="mt-2.5 text-center text-xs font-semibold text-grade-aplus dark:text-green-400">
             {t('waterTracker.goalReached')}
           </p>
         )
@@ -235,18 +235,18 @@ export default function WaterTrackerCard({ isVisitor }) {
           disabled={atCeiling}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-700 active:scale-[0.98] disabled:opacity-40 dark:border-slate-600 dark:text-slate-200"
         >
-          🥛 {t('waterTracker.glass')}
+          <GlassIcon /> {t('waterTracker.glass')}
         </button>
         <button
           onClick={() => add(BOTTLE_ML)}
           disabled={atCeiling}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-700 active:scale-[0.98] disabled:opacity-40 dark:border-slate-600 dark:text-slate-200"
         >
-          🍼 {t('waterTracker.bottle')}
+          <BottleIcon /> {t('waterTracker.bottle')}
         </button>
         <button
           onClick={handleResetTap}
-          className={`px-2 text-[11px] font-medium ${
+          className={`px-2 text-xs font-medium ${
             confirmingReset ? 'font-semibold text-red-500 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'
           }`}
         >
@@ -254,5 +254,61 @@ export default function WaterTrackerCard({ isVisitor }) {
         </button>
       </div>
     </section>
+  )
+}
+
+/**
+ * Drawn, because Unicode has no glass-of-water emoji.
+ *
+ * These buttons used 🥛 (glass of MILK) and 🍼 (BABY BOTTLE) — the nearest
+ * glass-shaped and bottle-shaped characters available, both of which depict
+ * dairy. On a water tracker that is simply the wrong drink, and the baby bottle
+ * reads as infant formula.
+ *
+ * Same reasoning as ShareGlyph and the analyzing-screen chopsticks: an emoji
+ * renders differently on every platform, can't inherit the disabled colour, and
+ * gets announced by screen readers — "glass of milk, Glass +250ml" was what
+ * these actually said out loud. `currentColor` plus aria-hidden fixes all three,
+ * and the visible text label already carries the meaning.
+ */
+function GlassIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="h-4 w-4 flex-none"
+    >
+      {/* Tapered tumbler */}
+      <path d="M6.8 3h10.4l-1.3 16.4a2 2 0 0 1-2 1.8h-3.8a2 2 0 0 1-2-1.8Z" />
+      {/* Water line — the only thing that makes it read as a drink rather than a cup */}
+      <path d="M7.5 9.5h9" />
+    </svg>
+  )
+}
+
+function BottleIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="h-4 w-4 flex-none"
+    >
+      {/* Cap */}
+      <path d="M9.8 2.2h4.4v2.4H9.8Z" />
+      {/* Neck flaring into the body */}
+      <path d="M10 4.6v1.9c0 .9-.4 1.3-1 1.9-.7.7-1 1.5-1 2.6v8.2a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V11c0-1.1-.3-1.9-1-2.6-.6-.6-1-1-1-1.9V4.6" />
+      {/* Water line */}
+      <path d="M8 13.2h8" />
+    </svg>
   )
 }

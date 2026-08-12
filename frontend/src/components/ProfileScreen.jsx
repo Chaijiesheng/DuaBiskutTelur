@@ -175,7 +175,7 @@ export default function ProfileScreen({ initialProfile, currentDailyBudget, allo
                 }`}
               >
                 {t(`profileScreen.exercise.${opt.value}.label`)}
-                <span className="mt-0.5 block text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                <span className="mt-0.5 block text-xs font-normal text-slate-500 dark:text-slate-400">
                   {t(`profileScreen.exercise.${opt.value}.hint`)}
                 </span>
               </button>
@@ -198,7 +198,7 @@ export default function ProfileScreen({ initialProfile, currentDailyBudget, allo
                 }`}
               >
                 {t(`profileScreen.goal.${opt.value}.label`)}
-                <span className="mt-0.5 block text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                <span className="mt-0.5 block text-xs font-normal text-slate-500 dark:text-slate-400">
                   {t(`profileScreen.goal.${opt.value}.hint`)}
                 </span>
               </button>
@@ -222,12 +222,12 @@ export default function ProfileScreen({ initialProfile, currentDailyBudget, allo
               placeholder={t('profileScreen.dailyStepsPlaceholder')}
             />
           </Field>
-          <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">{t('profileScreen.dailyStepsHint')}</p>
+          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{t('profileScreen.dailyStepsHint')}</p>
         </AccordionSection>
 
         {previewBudget != null && (
           <div className="rounded-2xl bg-green-50 px-4 py-3 text-center dark:bg-green-900/30">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-green-700 dark:text-green-400">
+            <p className="text-xs font-medium uppercase tracking-wide text-green-700 dark:text-green-400">
               {t('profileScreen.estimatedBudget')}
             </p>
             <p className="text-2xl font-black text-green-700 dark:text-green-400">{previewBudget} kcal</p>

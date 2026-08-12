@@ -13,7 +13,7 @@ export default function AchievementDetailModal({ badge, onClose }) {
       panelClassName="w-full max-w-xs rounded-3xl border border-slate-200 bg-white p-6 text-center shadow-xl dark:border-slate-700 dark:bg-slate-800"
     >
       {badge.secret && (
-        <p className="text-[10px] font-bold uppercase tracking-wide text-purple-500 dark:text-purple-400">
+        <p className="text-xs font-bold uppercase tracking-wide text-purple-500 dark:text-purple-400">
           {t('achievementModal.secretBadge')}
         </p>
       )}

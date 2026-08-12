@@ -1,0 +1,54 @@
+-- Curated Malaysian dish compositions. THIS FILE IS INTENTIONALLY EMPTY.
+--
+-- ---------------------------------------------------------------------------
+-- Why it is empty
+-- ---------------------------------------------------------------------------
+-- The engineering for local-first resolution is complete and tested: schema,
+-- alias matching, the local -> USDA -> model order, the "local" trust badge and
+-- the plausibility checks that run over whatever is in here. What is missing is
+-- the data, and nutrition figures for a health app must be transcribed from a
+-- published composition table -- not recalled, inferred, or generated. A
+-- plausible-looking number carrying the app's highest trust badge is worse than
+-- an honest model estimate, because the user has no way to tell it was invented
+-- and the app is telling them to trust it more.
+--
+-- Sources to transcribe from, both publicly published:
+--   * MyFCD -- Malaysian Food Composition Database (Ministry of Health Malaysia)
+--   * HPB   -- Singapore Health Promotion Board, Energy & Nutrient Composition
+-- Check the licensing terms of each before redistributing rows in this repo.
+--
+-- ---------------------------------------------------------------------------
+-- How to add rows
+-- ---------------------------------------------------------------------------
+-- This is a Flyway *repeatable* migration: Flyway re-runs it whenever the file's
+-- checksum changes, so curating data is a data change rather than a schema
+-- change. Edit this file, deploy, done. MERGE rather than INSERT so re-running
+-- updates existing rows instead of failing on the unique constraint.
+--
+-- canonical_name and alias must both be written in the form
+-- NutritionCacheService.canonicalize produces: lowercase, accents stripped,
+-- punctuation flattened to single spaces. "Char Kway Teow" -> "char kway teow".
+-- LocalFoodSeedTest fails the build if any row here breaks that, or if the
+-- macros do not add up (see NutrientPlausibility) -- a transcription slip in a
+-- nutrient column is otherwise invisible until it grades someone's dinner.
+--
+-- Worked example of the shape (values below are illustrative only -- do not
+-- uncomment without replacing them with transcribed figures and a real
+-- provenance string):
+--
+-- MERGE INTO local_food (canonical_name, display_name, typical_grams,
+--         calories_per100g, protein_per100g, carbs_per100g, fat_per100g,
+--         fiber_per100g, sugar_per100g, sodium_per100g,
+--         food_group, cooking_method, source, provenance)
+--     KEY (canonical_name)
+--     VALUES ('nasi lemak', 'Nasi lemak', 230,
+--         <kcal>, <g>, <g>, <g>, <g>, <g>, <mg>,
+--         'grain', 'steamed', 'MyFCD', 'MyFCD 2015, item R043');
+--
+-- MERGE INTO local_food_alias (alias, local_food_id)
+--     KEY (alias)
+--     VALUES ('nasi lemak bungkus', (SELECT id FROM local_food WHERE canonical_name = 'nasi lemak'));
+--
+-- ---------------------------------------------------------------------------
+-- A no-op statement keeps this a valid migration while the file carries no data.
+SELECT 1;

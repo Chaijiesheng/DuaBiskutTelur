@@ -1,8 +1,8 @@
 package com.duabiskuttelur.service;
 
 import com.duabiskuttelur.model.AnalysisResponse;
+import com.duabiskuttelur.model.DailyMealFact;
 import com.duabiskuttelur.model.DashboardResponse;
-import com.duabiskuttelur.persistence.MealAnalysisEntity;
 import com.duabiskuttelur.persistence.MealAnalysisRepository;
 import com.duabiskuttelur.persistence.UserEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 
 /** Builds the "today at a glance" summary shown right after login. */
@@ -38,7 +39,7 @@ public class DashboardService {
     }
 
     public DashboardResponse today(UserEntity user) {
-        List<MealAnalysisEntity> entries = todaysEntries(user.getId());
+        List<DailyMealFact> entries = todaysEntries(user.getId());
         int calorieTarget = calorieTargetFor(user);
         int proteinTarget = proteinTargetFor(user, calorieTarget);
 
@@ -47,17 +48,16 @@ public class DashboardService {
         }
 
         double totalCalories = 0;
-        double totalProtein = 0;
         int totalScore = 0;
-        for (MealAnalysisEntity entry : entries) {
-            totalCalories += entry.getCalories();
-            totalScore += entry.getScore();
-            totalProtein += proteinFor(entry);
+        for (DailyMealFact entry : entries) {
+            totalCalories += entry.calories();
+            totalScore += entry.score();
         }
         int avgScore = (int) Math.round(totalScore / (double) entries.size());
 
         return new DashboardResponse(true, round1(totalCalories), calorieTarget,
-                round1(totalProtein), proteinTarget, entries.size(), scoringService.gradeFor(avgScore));
+                round1(totalProtein(entries)), proteinTarget, entries.size(),
+                scoringService.gradeFor(avgScore));
     }
 
     /**
@@ -68,26 +68,24 @@ public class DashboardService {
      * score/grade aggregation that endpoint also needs.
      */
     public TodaySoFar todaySoFar(UserEntity user) {
-        List<MealAnalysisEntity> entries = todaysEntries(user.getId());
+        List<DailyMealFact> entries = todaysEntries(user.getId());
         double totalCalories = 0;
-        double totalProtein = 0;
-        for (MealAnalysisEntity entry : entries) {
-            totalCalories += entry.getCalories();
-            totalProtein += proteinFor(entry);
+        for (DailyMealFact entry : entries) {
+            totalCalories += entry.calories();
         }
         int calorieTarget = calorieTargetFor(user);
         int proteinTarget = proteinTargetFor(user, calorieTarget);
-        return new TodaySoFar(totalCalories, totalProtein, calorieTarget, proteinTarget);
+        return new TodaySoFar(totalCalories, totalProtein(entries), calorieTarget, proteinTarget);
     }
 
     public record TodaySoFar(double caloriesSoFar, double proteinSoFar, int calorieTarget, int proteinTarget) {
     }
 
-    private List<MealAnalysisEntity> todaysEntries(Long userId) {
+    private List<DailyMealFact> todaysEntries(Long userId) {
         ZoneId zone = ZoneId.systemDefault();
         Instant startOfDay = LocalDate.now(zone).atStartOfDay(zone).toInstant();
         Instant endOfDay = startOfDay.plusSeconds(86400);
-        return repository.findByUserIdAndCreatedAtBetween(userId, startOfDay, endOfDay);
+        return repository.findDailyFacts(userId, startOfDay, endOfDay);
     }
 
     private static int calorieTargetFor(UserEntity user) {
@@ -108,16 +106,37 @@ public class DashboardService {
         };
     }
 
-    private double proteinFor(MealAnalysisEntity entry) {
-        // Denormalized at write time (AnalysisService) so the common case never
-        // touches resultJson — fall back to parsing it only for rows saved
-        // before that column existed.
-        if (entry.getProtein() != null) {
-            return entry.getProtein();
+    /**
+     * Protein is denormalized at write time (V2, set by {@code AnalysisService}),
+     * so the common case is a plain sum over a column. Rows written before that
+     * column existed carry null and have to be parsed back out of
+     * {@code result_json} — but only those rows, fetched by id in a second query
+     * that does not run at all unless one is present. Reading the CLOB for every
+     * meal to cover a case that has not occurred since V2 is what made this the
+     * most expensive cheap query in the app.
+     */
+    private double totalProtein(List<DailyMealFact> entries) {
+        double total = 0;
+        List<Long> legacyIds = new ArrayList<>();
+        for (DailyMealFact entry : entries) {
+            if (entry.protein() != null) {
+                total += entry.protein();
+            } else {
+                legacyIds.add(entry.id());
+            }
         }
+        if (legacyIds.isEmpty()) {
+            return total;
+        }
+        for (String resultJson : repository.findResultJsonByIds(legacyIds)) {
+            total += proteinFromStoredResult(resultJson);
+        }
+        return total;
+    }
+
+    private double proteinFromStoredResult(String resultJson) {
         try {
-            AnalysisResponse response = mapper.readValue(entry.getResultJson(), AnalysisResponse.class);
-            return response.totals().protein();
+            return mapper.readValue(resultJson, AnalysisResponse.class).totals().protein();
         } catch (Exception e) {
             log.warn("Failed to parse stored result for protein total: {}", e.getMessage());
             return 0;

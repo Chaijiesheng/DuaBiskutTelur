@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import { fetchHistory } from '../api.js'
+import { useMemo } from 'react'
+import { useHistory } from '../history/HistoryContext.jsx'
 import SignInBanner from './SignInBanner.jsx'
 import WeeklyCaloriesChart, { getWeeklyDays } from './WeeklyCaloriesChart.jsx'
 import WeightTrendCard from './WeightTrendCard.jsx'
 import WaterTrackerCard from './WaterTrackerCard.jsx'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
+import { AnalysisSkeleton } from './Skeleton.jsx'
 
 /**
  * Weekly analytics dashboard. Reuses the same 7-day bucketing as the History
@@ -12,26 +13,17 @@ import { useLanguage } from '../i18n/LanguageContext.jsx'
  * achievements are a follow-up. Weight trend needs persistent history across
  * sessions, so it's signed-in only — visitors just don't see that card.
  */
-export default function AnalysisScreen({ onAuthExpired, isVisitor, visitorEntries, dailyBudget, goal }) {
+export default function AnalysisScreen({ isVisitor, dailyBudget, goal }) {
   const { t } = useLanguage()
-  const [fetched, setFetched] = useState(null)
-  const [error, setError] = useState(false)
-
-  useEffect(() => {
-    if (isVisitor) return
-    fetchHistory()
-      .then(setFetched)
-      .catch((e) => {
-        if (e.code === 'UNAUTHENTICATED') onAuthExpired?.()
-        else setError(true)
-      })
-  }, [isVisitor, onAuthExpired])
-
-  const entries = isVisitor ? visitorEntries : fetched
+  // Shares the History tab's cached copy: this screen used to issue its own
+  // identical fetch, and both refetched on every tab switch.
+  const { entries, recent, loading, error } = useHistory()
 
   const stats = useMemo(() => {
-    if (!entries) return null
-    const days = getWeeklyDays(entries)
+    // recent, not entries: the list is capped at 50 rows, so a heavy user's
+    // week was being summed from a truncated set.
+    if (!recent) return null
+    const days = getWeeklyDays(recent)
     const withMeals = days.filter((d) => d.mealCount > 0)
     const totalWeek = days.reduce((sum, d) => sum + d.totalCalories, 0)
     const highest = withMeals.length
@@ -50,13 +42,13 @@ export default function AnalysisScreen({ onAuthExpired, isVisitor, visitorEntrie
       lowest,
       totalMeals: days.reduce((sum, d) => sum + d.mealCount, 0),
     }
-  }, [entries])
+  }, [recent])
 
-  if (!isVisitor && error) {
+  if (error) {
     return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('analysis.couldntLoad')}</p>
   }
-  if (!entries) {
-    return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('analysis.loading')}</p>
+  if (loading || !entries) {
+    return <AnalysisSkeleton label={t('analysis.loading')} />
   }
   if (entries.length === 0) {
     return (
@@ -100,7 +92,7 @@ export default function AnalysisScreen({ onAuthExpired, isVisitor, visitorEntrie
         />
       </div>
 
-      <WeeklyCaloriesChart entries={entries} dailyBudget={dailyBudget} title={t('analysis.dailyTrend')} />
+      <WeeklyCaloriesChart entries={recent} dailyBudget={dailyBudget} title={t('analysis.dailyTrend')} />
 
       {!isVisitor && <WeightTrendCard goal={goal} />}
 
@@ -113,7 +105,7 @@ export default function AnalysisScreen({ onAuthExpired, isVisitor, visitorEntrie
         </p>
       </section>
 
-      <p className="px-1 text-center text-[11px] text-slate-600 dark:text-slate-300">{t('analysis.comingSoon')}</p>
+      <p className="px-1 text-center text-xs text-slate-600 dark:text-slate-300">{t('analysis.comingSoon')}</p>
     </div>
   )
 }
@@ -122,14 +114,14 @@ function StatCard({ icon, label, value, unit, sub, tone }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
         <span className="text-base">{icon}</span>
       </div>
       <p className={`mt-1 text-xl font-black ${tone || 'text-slate-900 dark:text-slate-100'}`}>
         {value}
         {unit && <span className="ml-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{unit}</span>}
       </p>
-      {sub && <p className="text-[11px] text-slate-500 dark:text-slate-400">{sub}</p>}
+      {sub && <p className="text-xs text-slate-500 dark:text-slate-400">{sub}</p>}
     </div>
   )
 }

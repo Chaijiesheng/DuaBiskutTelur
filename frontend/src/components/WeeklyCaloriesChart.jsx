@@ -2,10 +2,9 @@ import { useMemo, useState } from 'react'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import { useTheme } from '../theme/ThemeContext.jsx'
 
-const CHART_HEIGHT = 40
-const BAR_WIDTH = 10
-const BAR_STEP = 14
 const LOCALE_TAG = { en: 'en-US', zh: 'zh-CN', ms: 'ms-MY' }
+/** A day with no meals still gets a sliver, so the column reads as "logged nothing". */
+const MIN_BAR_PCT = 3
 
 /** Buckets meal history entries into the last 7 calendar days (oldest first). */
 export function getWeeklyDays(entries, localeTag) {
@@ -27,7 +26,27 @@ export function getWeeklyDays(entries, localeTag) {
   })
 }
 
-/** Interactive 7-day calories bar chart — tap a bar to see that day's total. */
+/**
+ * Interactive 7-day calories bar chart — tap a bar to see that day's total.
+ *
+ * Laid out with flex rather than an SVG viewBox, which fixed three things at
+ * once:
+ *
+ * - **Width.** The old `viewBox="0 0 100 54"` inside `h-24 w-full` scaled
+ *   uniformly under the default `xMidYMid meet`, so the chart drew 178px wide
+ *   inside a 415px card — 43% of it — and sat letterboxed in the middle. Flex
+ *   columns fill whatever width they are given, at any card size.
+ * - **Focus.** Focus lived on a `<g role="button" tabIndex={0}>`, where
+ *   `:focus-visible` never matches a pointer press, so the styled green ring
+ *   never applied and the browser's own two-tone ring showed instead — drawn
+ *   around the group's bounding box, which included the full-height hit target
+ *   and the day letter, so it towered over the bar it was meant to mark. These
+ *   are real buttons now, so focus-visible behaves and the ring follows the
+ *   element.
+ * - **Selection.** The selected bar was marked with a #15803d stroke on a
+ *   #22c55e fill — dark green on green, effectively invisible. Selection is now
+ *   a filled column track, which does not depend on telling two greens apart.
+ */
 export default function WeeklyCaloriesChart({ entries, dailyBudget, title }) {
   const { t, lang } = useLanguage()
   const { theme } = useTheme()
@@ -48,90 +67,71 @@ export default function WeeklyCaloriesChart({ entries, dailyBudget, title }) {
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{title || t('weeklyChart.title')}</h2>
-        <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          {title || t('weeklyChart.title')}
+        </h2>
+        <span className="shrink-0 text-xs font-semibold text-slate-600 dark:text-slate-300">
           {activeDay
             ? `${activeDay.dateLabel} · ${Math.round(activeDay.totalCalories)} kcal`
             : t('analysis.weekAvg', weekAvg)}
         </span>
       </div>
-      <svg viewBox={`0 0 100 ${CHART_HEIGHT + 14}`} className="mt-2 h-24 w-full">
-        <line
-          x1="2"
-          y1={CHART_HEIGHT}
-          x2="98"
-          y2={CHART_HEIGHT}
-          stroke={dark ? '#334155' : '#e2e8f0'}
-          strokeWidth="0.5"
-        />
+
+      <div className="mt-3 flex items-stretch gap-1">
         {days.map((d, i) => {
-          const x = 4 + i * BAR_STEP
-          const barHeight = maxValue > 0 ? (d.totalCalories / maxValue) * CHART_HEIGHT : 0
-          const isOver = d.totalCalories > budget
           const isSelected = selected === i
           const dimmed = selected != null && !isSelected
-          const barColor = d.totalCalories === 0 ? (dark ? '#334155' : '#e2e8f0') : isOver ? '#ef4444' : '#22c55e'
-
-          const toggle = () => setSelected(isSelected ? null : i)
+          const isOver = d.totalCalories > budget
+          const pct = maxValue > 0
+            ? Math.max((d.totalCalories / maxValue) * 100, MIN_BAR_PCT)
+            : MIN_BAR_PCT
+          const barColor = d.totalCalories === 0
+            ? (dark ? '#334155' : '#e2e8f0')
+            : isOver ? '#ef4444' : '#22c55e'
 
           return (
-            <g
+            <button
               key={i}
-              onClick={toggle}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  toggle()
-                }
-              }}
-              role="button"
-              tabIndex={0}
+              type="button"
+              onClick={() => setSelected(isSelected ? null : i)}
               aria-label={`${d.dateLabel}: ${Math.round(d.totalCalories)} kcal`}
               aria-pressed={isSelected}
-              className="cursor-pointer focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-grade-aplus"
-              opacity={dimmed ? 0.35 : 1}
+              className={`flex flex-1 flex-col items-center gap-1 rounded-lg px-0.5 pb-1 pt-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-grade-aplus dark:focus-visible:ring-green-400 ${
+                isSelected ? 'bg-slate-100 dark:bg-slate-700/70' : ''
+              } ${dimmed ? 'opacity-40' : ''}`}
             >
-              {/* wider transparent hit target for comfortable tapping on mobile */}
-              <rect x={x - 2} y="0" width={BAR_WIDTH + 4} height={CHART_HEIGHT} fill="transparent" />
-              <rect
-                x={x}
-                y={CHART_HEIGHT - Math.max(barHeight, 1)}
-                width={BAR_WIDTH}
-                height={Math.max(barHeight, 1)}
-                rx="1.5"
-                fill={barColor}
-                stroke={isSelected ? '#15803d' : 'none'}
-                strokeWidth={isSelected ? 1 : 0}
-              />
-              {isOver && (
-                // Shape-based cue for "over budget" that doesn't depend on
-                // distinguishing red from green (see A7).
-                <text
-                  x={x + BAR_WIDTH / 2}
-                  y={Math.max(4, CHART_HEIGHT - Math.max(barHeight, 1) - 1.5)}
-                  textAnchor="middle"
-                  fontSize="5"
-                  fontWeight="bold"
-                  fill={dark ? '#fca5a5' : '#b91c1c'}
-                >
-                  !
-                </text>
-              )}
-              <text
-                x={x + BAR_WIDTH / 2}
-                y={CHART_HEIGHT + 8}
-                textAnchor="middle"
-                fontSize="5"
-                fontWeight={isSelected ? 'bold' : 'normal'}
-                fill={isSelected ? (dark ? '#4ade80' : '#15803d') : (dark ? '#94a3b8' : '#64748b')}
+              {/* Shape-based cue for "over budget" that doesn't depend on
+                  distinguishing red from green (see A7). Reserved even when
+                  absent so every column keeps the same baseline. */}
+              <span
+                aria-hidden="true"
+                className="h-3 text-[10px] font-bold leading-3"
+                style={{ color: dark ? '#fca5a5' : '#b91c1c' }}
+              >
+                {isOver ? '!' : ''}
+              </span>
+
+              <span className="flex h-14 w-full items-end">
+                <span
+                  className="w-full rounded-t-[3px]"
+                  style={{ height: `${pct}%`, backgroundColor: barColor }}
+                />
+              </span>
+
+              <span
+                className={`text-[10px] leading-none ${
+                  isSelected
+                    ? 'font-bold text-grade-aplus dark:text-green-400'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
               >
                 {d.label}
-              </text>
-            </g>
+              </span>
+            </button>
           )
         })}
-      </svg>
+      </div>
     </section>
   )
 }

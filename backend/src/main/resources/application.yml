@@ -102,7 +102,47 @@ app:
   # Per-call cap. Flash models answer in well under 30s; a hung call must fail
   # fast so the fallback models get a chance within the gateway time budget.
   read-timeout-ms: 30000
-  usda-retries: 2
+  # Total wall clock for one Gemini call chain — every model x key attempt plus
+  # the backoff sleeps, not per call. Without it the schedule multiplies out to
+  # ~18 minutes (4 backoff rounds x 3 models x 3 keys x the 30s read timeout) of
+  # a held request thread, long after nginx's proxy_read_timeout (120s) already
+  # returned a 504 to the client. Enough of those in flight during a provider
+  # outage exhausts Tomcat's thread pool and takes down every other endpoint
+  # with it, so this ceiling is what keeps a Gemini incident from becoming an
+  # app incident. Vision + feedback below must together stay under that 120s.
+  gemini-budget-ms: 60000
+  # Feedback gives up sooner than vision on purpose: FeedbackService already
+  # falls back to deterministic rule-based text, so a struggling provider
+  # shouldn't get the full vision budget a second time for prose that has a
+  # working substitute.
+  gemini-feedback-budget-ms: 25000
+  # The budgets above bound how LONG one call holds a request thread; this
+  # bounds how MANY do at once. Both are needed: with a 60s budget and Tomcat's
+  # 200 threads, a burst during a provider slowdown still drains the pool and
+  # takes sign-in, history and dashboards down with it. Past this limit callers
+  # are shed as ANALYZER_BUSY in ~1s and hand their thread straight back, so
+  # only requests that actually reached Gemini are holding one. Well above what
+  # the free tier's ~15 req/min per key can sustain, so it never throttles
+  # healthy traffic — it exists purely as a ceiling.
+  gemini-max-concurrent-calls: 16
+  # One retry, not two: a USDA failure is usually the service being slow or
+  # down, and a menu scan pays this per dish. Genuinely transient blips are rare
+  # enough that the second retry cost more latency than it recovered.
+  usda-retries: 1
+  # USDA gets its own, much shorter read timeout — it used to share the 30s
+  # above with Gemini, which is sized for a model writing prose. A keyword
+  # search answers in well under a second, and this value is the dominant term
+  # in how long a cold menu scan takes.
+  usda-read-timeout-ms: 5000
+  # Dishes resolved concurrently within one menu scan. Bounded because 60
+  # simultaneous lookups would be a burst against a rate-limited third party;
+  # serial (the old behaviour) made a cold 60-dish menu outlast the gateway.
+  menu-resolve-parallelism: 8
+  # Pin each dish's first resolution (NutritionCacheService) so repeat scans of
+  # the same dish can't re-roll the USDA-match/model-estimate lottery. Set false
+  # to force every scan to resolve afresh — e.g. if a batch of dishes was pinned
+  # to model estimates during a USDA outage.
+  nutrition-cache-enabled: ${NUTRITION_CACHE_ENABLED:true}
 
 # Scoring engine thresholds — every value here is tunable (see ScoringProperties)
 scoring:
@@ -110,3 +150,24 @@ scoring:
   fiber-bonus-threshold-grams: 8
   sugar-penalty-threshold-grams: 25
   sodium-penalty-threshold-mg: 800
+
+# Actuator. Reachable only from inside the compose network: the backend port is
+# not published to the host, nginx returns 404 for /actuator, and SecurityConfig
+# denies everything under /actuator that is not named below. Widening this list
+# is therefore not enough on its own to expose an endpoint - both places have to
+# change, which is the point.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # Default, restated because it is load-bearing: details name the failing
+      # component and its exception, and /actuator/health is permitAll.
+      show-details: never
+  metrics:
+    tags:
+      application: duabiskuttelur

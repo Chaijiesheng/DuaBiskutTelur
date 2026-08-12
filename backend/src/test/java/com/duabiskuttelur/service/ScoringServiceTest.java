@@ -37,24 +37,62 @@ class ScoringServiceTest {
 
     @Test
     void perfectlyBalancedMealScoresAPlus() {
-        // 600 kcal at exactly 30% protein / 40% carbs / 30% fat, fiber >= 8g,
-        // vegetables present, 3 food groups, no penalties.
+        // 600 kcal at exactly the maintenance target of 25% protein / 45% carbs
+        // / 30% fat, fiber >= 8g, vegetables present, 3 food groups, no
+        // penalties. The target used to be a flat 30/40/30 for everyone, which
+        // matched none of the three splits the app displays -- see MacroTargets.
         List<FoodItem> meal = List.of(
-                food("Grilled chicken breast", "protein", false, 232, 40, 0, 8, 0, 0, 300),
-                food("Brown rice", "grain", false, 238, 5, 50, 2, 4, 1, 10),
-                food("Stir-fried vegetables", "vegetable", false, 130, 0, 10, 10, 5, 3, 200));
+                food("Grilled chicken breast", "protein", false, 150, 37.5, 0, 0, 0, 0, 300),
+                food("Brown rice", "grain", false, 270, 0, 67.5, 0, 5, 1, 10),
+                food("Stir-fried vegetables", "vegetable", false, 180, 0, 0, 20, 4, 2, 200));
 
         ScoreResult result = scoreOf(meal);
 
         assertEquals("A+", result.grade());
-        assertTrue(result.score() >= 90, "expected A+ band, got " + result.score());
         assertEquals(100, result.score());
     }
 
+    /**
+     * The inconsistency N3 named: MacroDonut showed a maintenance user "protein
+     * target 25%" while the engine graded everyone against 30%, both visible on
+     * one screen. The same plate should now land differently depending on what
+     * the user said they were aiming for.
+     */
     @Test
-    void balancedButSaltyLowFiberMealScoresA() {
-        // Same perfect macro split, but sodium over 800mg and fiber under 8g:
-        // loses the fiber bonus and takes the sodium penalty -> 87.
+    void theSameMealIsGradedAgainstTheSplitTheUserIsAimingFor() {
+        // Protein-heavy: 40% protein / 30% carbs / 30% fat by calories.
+        List<FoodItem> proteinHeavy = List.of(
+                food("Grilled chicken", "protein", false, 240, 60, 0, 0, 0, 0, 300),
+                food("Rice", "grain", false, 180, 0, 45, 0, 5, 1, 10),
+                food("Greens", "vegetable", false, 180, 0, 0, 20, 4, 2, 200));
+        Totals totals = Totals.of(proteinHeavy);
+
+        double forLoss = scoring.score(proteinHeavy, totals, 2000, "weight_loss").balancePoints();
+        double forGain = scoring.score(proteinHeavy, totals, 2000, "muscle_gain").balancePoints();
+
+        assertTrue(forLoss > forGain,
+                "a protein-heavy plate should suit a 35%-protein weight-loss target better than a "
+                        + "30%/45% muscle-gain one, got " + forLoss + " vs " + forGain);
+    }
+
+    @Test
+    void anAbsentGoalIsGradedAgainstMaintenanceRatherThanFailing() {
+        // Visitors and users who never set a goal are the common case, not an
+        // error -- and Map.of rejects a null key outright.
+        List<FoodItem> meal = List.of(food("Rice", "grain", false, 300, 6, 60, 3, 2, 1, 100));
+
+        assertEquals(scoring.score(meal, Totals.of(meal), 2000, "maintenance").score(),
+                scoring.score(meal, Totals.of(meal), 2000, null).score());
+    }
+
+    /**
+     * 900mg of sodium is 100mg over the threshold, and used to cost the entire
+     * 8-point penalty -- so this meal and an identical one at 799mg differed by
+     * 13 points once the fibre cliff was included. The penalty now ramps, so a
+     * marginal overshoot costs a marginal amount.
+     */
+    @Test
+    void aMarginallySaltyMealIsNoLongerPunishedAsIfItWereVerySalty() {
         List<FoodItem> meal = List.of(
                 food("Chicken rice (roasted)", "protein", false, 232, 40, 0, 8, 0, 0, 500),
                 food("Seasoned rice", "grain", false, 238, 5, 50, 2, 3, 1, 200),
@@ -62,8 +100,48 @@ class ScoringServiceTest {
 
         ScoreResult result = scoreOf(meal);
 
-        assertEquals("A", result.grade());
-        assertTrue(result.score() >= 80 && result.score() < 90, "expected A band, got " + result.score());
+        assertEquals(900, Totals.of(meal).sodium(), 0.01);
+        assertTrue(result.score() >= 90, "a 100mg overshoot should barely move the grade, got " + result.score());
+    }
+
+    /** Softened, not removed: a genuinely salty meal still loses most of the penalty. */
+    @Test
+    void aGenuinelySaltyMealStillLosesTheFullPenalty() {
+        List<FoodItem> salty = List.of(
+                food("Chicken rice (roasted)", "protein", false, 232, 40, 0, 8, 0, 0, 1100),
+                food("Seasoned rice", "grain", false, 238, 5, 50, 2, 3, 1, 400),
+                food("Blanched greens", "vegetable", false, 130, 0, 10, 10, 2, 3, 300));
+
+        double saltyQuality = scoreOf(salty).qualityPoints();
+        List<FoodItem> mild = List.of(
+                food("Chicken rice (roasted)", "protein", false, 232, 40, 0, 8, 0, 0, 200),
+                food("Seasoned rice", "grain", false, 238, 5, 50, 2, 3, 1, 100),
+                food("Blanched greens", "vegetable", false, 130, 0, 10, 10, 2, 3, 100));
+
+        // 1800mg is past the "full at" mark, so the whole 8 points are gone.
+        assertEquals(8, scoreOf(mild).qualityPoints() - saltyQuality, 0.01);
+    }
+
+    /**
+     * The step function N3 named. Two meals a hair apart on either side of a
+     * threshold must not differ by a whole bonus or penalty.
+     */
+    @Test
+    void thereIsNoCliffAtAnyQualityThreshold() {
+        for (double[] pair : new double[][]{
+                // fibre either side of 8g
+                {7.9, 8.1, 0, 0},
+                // sugar either side of 25g
+                {4, 4, 24.9, 25.1},
+        }) {
+            List<FoodItem> below = List.of(
+                    food("A", "grain", false, 400, 20, 50, 12, pair[0], pair[2], 700));
+            List<FoodItem> above = List.of(
+                    food("A", "grain", false, 400, 20, 50, 12, pair[1], pair[3], 700));
+
+            double gap = Math.abs(scoreOf(above).qualityPoints() - scoreOf(below).qualityPoints());
+            assertTrue(gap < 0.5, "a 0.2 difference produced a " + gap + "-point swing");
+        }
     }
 
     @Test
@@ -195,17 +273,61 @@ class ScoringServiceTest {
         assertEquals(10.0, result.varietyPoints(), 0.001);
     }
 
+    /**
+     * The snack exemption used to require a single logged item, so a coffee
+     * <em>and</em> a biscuit — two items, ~180 kcal — was graded as a failed
+     * meal: portion points scaled toward zero for under-eating, and variety was
+     * judged on 2 of 3 food groups. The item count never meant anything here;
+     * total calories is the whole question.
+     */
     @Test
-    void multiItemSparseMealIsStillTreatedAsUnderEating() {
-        // The snack exemption is scoped to a single logged item — a
-        // genuinely sparse multi-item plate is still under-eating, not a
-        // snack, so it should keep losing portion points as before.
+    void aTwoItemSnackIsNoLongerGradedAsAFailedMeal() {
+        List<FoodItem> snack = List.of(
+                food("Kopi O", "beverage", false, 40, 0, 10, 0, 0, 9, 15),
+                food("Biscuit", "grain", false, 140, 2, 20, 6, 0.5, 5, 90));
+
+        ScoreResult result = scoring.score(snack, Totals.of(snack), 2000);
+
+        assertEquals(20.0, result.portionPoints(), 0.001,
+                "180 kcal is a snack whether it arrives as one item or two");
+        assertEquals(10.0, result.varietyPoints(), 0.001,
+                "a snack is not expected to cover three food groups");
+    }
+
+    /**
+     * The exemption is about size, so a real meal is still judged as one however
+     * many items it arrives in — and an oversized one still loses portion points,
+     * which is the branch that remains live.
+     */
+    @Test
+    void aFullSizedMealIsStillJudgedAsAMealHoweverManyItemsItHas() {
         List<FoodItem> meal = List.of(
-                food("Half a cracker", "grain", false, 40, 1, 8, 0.5, 0.5, 0, 30),
-                food("Sliver of cheese", "protein", false, 40, 3, 0, 3, 0, 0, 100));
+                food("Rice", "grain", false, 300, 6, 65, 1, 2, 1, 100),
+                food("Chicken", "protein", false, 250, 30, 0, 14, 0, 0, 400));
+        assertEquals(20.0, scoring.score(meal, Totals.of(meal), 2000).portionPoints(), 0.001);
 
-        ScoreResult result = scoring.score(meal, Totals.of(meal), 2000);
+        List<FoodItem> huge = List.of(
+                food("Rice, large", "grain", false, 900, 18, 190, 6, 4, 3, 300),
+                food("Fried chicken", "protein", true, 800, 50, 20, 55, 1, 2, 900));
+        assertTrue(scoring.score(huge, Totals.of(huge), 2000).portionPoints() < 20.0,
+                "1700 kcal against a 2000 kcal day should still cost portion points");
+    }
 
-        assertTrue(result.portionPoints() < 20.0, "sparse multi-item meal should still lose portion points");
+    /**
+     * A consequence of keying the exemption on calories alone that is worth
+     * pinning: the under-eating ramp is now unreachable through score(), because
+     * anything below the threshold is a snack. Logging 200 kcal is a snack, and
+     * nothing in the log distinguishes that from an intended small meal — so
+     * exempting it is the honest reading, not a gap.
+     */
+    @Test
+    void nothingBelowTheSnackThresholdIsPenalizedForUnderEating() {
+        for (double calories : new double[]{40, 120, 240}) {
+            List<FoodItem> small = List.of(
+                    food("A", "grain", false, calories / 2, 1, 8, 0.5, 0.5, 0, 30),
+                    food("B", "protein", false, calories / 2, 3, 0, 3, 0, 0, 100));
+            assertEquals(20.0, scoring.score(small, Totals.of(small), 2000).portionPoints(), 0.001,
+                    calories + " kcal should be exempt, not under-eating");
+        }
     }
 }

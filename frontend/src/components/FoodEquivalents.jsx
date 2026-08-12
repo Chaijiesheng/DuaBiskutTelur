@@ -12,7 +12,7 @@ export default function FoodEquivalents({ calories }) {
       {equivalents.map((food) => (
         <span
           key={food.labelKey}
-          className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+          className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
         >
           {food.emoji} ~{food.count} {t(`foodEquivalents.${food.labelKey}`)}
         </span>

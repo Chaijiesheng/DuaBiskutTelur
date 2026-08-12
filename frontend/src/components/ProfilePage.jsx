@@ -6,8 +6,10 @@ import SignInBanner from './SignInBanner.jsx'
 import AccordionSection from './AccordionSection.jsx'
 import AchievementUnlockOverlay from './AchievementUnlockOverlay.jsx'
 import AchievementDetailModal from './AchievementDetailModal.jsx'
+import AccountDataSection from './AccountDataSection.jsx'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import LanguageThemePicker from './LanguageThemePicker.jsx'
+import { BadgeGridSkeleton } from './Skeleton.jsx'
 
 const SEEN_KEY_PREFIX = 'dbt_seen_achievements_'
 
@@ -30,7 +32,7 @@ function saveSeenIds(userKey, ids) {
 }
 
 /** Dedicated Profile tab: identity, then accordion sections (only one open at a time). */
-export default function ProfilePage({ user, isVisitor, hasProfile, dailyBudget, onEditProfile, onLogout }) {
+export default function ProfilePage({ user, isVisitor, hasProfile, dailyBudget, onEditProfile, onLogout, onAccountDeleted }) {
   const { t, lang } = useLanguage()
   const [achievements, setAchievements] = useState(null)
   // Collapsed by default; opening one section closes any other that was open.
@@ -134,7 +136,7 @@ export default function ProfilePage({ user, isVisitor, hasProfile, dailyBudget, 
         onToggle={() => toggleSection('achievements')}
       >
         {!achievements ? (
-          <p className="text-sm text-slate-500 dark:text-slate-400">{t('history.loading')}</p>
+          <BadgeGridSkeleton label={t('history.loading')} />
         ) : (
           <div className="grid grid-cols-3 gap-3">
             {achievements.badges.map((badge) => (
@@ -171,6 +173,16 @@ export default function ProfilePage({ user, isVisitor, hasProfile, dailyBudget, 
         </button>
       </AccordionSection>
 
+      {/* Its own section rather than a row inside Settings: deleting an account
+          shouldn't sit one tap away from the theme picker. */}
+      <AccordionSection
+        title={t('accountData.title')}
+        isOpen={openSection === 'data'}
+        onToggle={() => toggleSection('data')}
+      >
+        <AccountDataSection onAccountDeleted={onAccountDeleted} />
+      </AccordionSection>
+
       {unlockQueue.length > 0 && (
         <AchievementUnlockOverlay
           badge={unlockQueue[0]}
@@ -198,7 +210,7 @@ function AchievementCard({ badge, onSelect }) {
       }`}
     >
       <span className="text-2xl">{badge.icon}</span>
-      <span className="text-[10px] font-semibold leading-tight text-slate-700 dark:text-slate-300">{badge.label}</span>
+      <span className="text-xs font-semibold leading-tight text-slate-700 dark:text-slate-300">{badge.label}</span>
       {!badge.unlocked && (
         <span className="text-[9px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{t('profile.locked')}</span>
       )}
@@ -209,7 +221,7 @@ function AchievementCard({ badge, onSelect }) {
 function Detail({ label, value }) {
   return (
     <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-700">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
       <p className="mt-0.5 text-sm font-bold text-slate-900 dark:text-slate-100">{value}</p>
     </div>
   )

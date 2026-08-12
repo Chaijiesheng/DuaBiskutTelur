@@ -7,6 +7,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: neither job writes anything back to the repository.
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (Java 17, Maven)
@@ -43,5 +47,9 @@ jobs:
         run: npm ci
       - name: Check i18n dictionary parity
         run: node scripts/check-i18n-parity.mjs
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test
       - name: Production build
         run: npm run build

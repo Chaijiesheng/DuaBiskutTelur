@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import CaptureScreen from './components/CaptureScreen.jsx'
 import TodaySummaryCard from './components/TodaySummaryCard.jsx'
 import BarcodeScanScreen from './components/BarcodeScanScreen.jsx'
@@ -16,7 +17,9 @@ import DashboardSummary from './components/DashboardSummary.jsx'
 import SignInScreen from './components/SignInScreen.jsx'
 import EmptyDashboardModal from './components/EmptyDashboardModal.jsx'
 import {
+  CANCELLED,
   analyzeImage,
+  exportHistoryPdf,
   lookupBarcode as lookupBarcodeApi,
   rankMenuImage,
   fetchMe,
@@ -30,6 +33,7 @@ import { calculateDailyBudget } from './calorieCalculator.js'
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext.jsx'
 import { ThemeProvider } from './theme/ThemeContext.jsx'
 import { setUpdateGateBusy } from './swUpdateGate.js'
+import { HistoryProvider } from './history/HistoryContext.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 
 const DEFAULT_BUDGET = 2000
@@ -44,21 +48,38 @@ function loadLocalProfile() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <LanguageProvider>
-        <ErrorBoundary>
-          <AppShell />
-        </ErrorBoundary>
-      </LanguageProvider>
-    </ThemeProvider>
+    <BrowserRouter>
+      <ThemeProvider>
+        <LanguageProvider>
+          <ErrorBoundary>
+            <AppShell />
+          </ErrorBoundary>
+        </LanguageProvider>
+      </ThemeProvider>
+    </BrowserRouter>
   )
+}
+
+/** Which bottom-tab is lit for a given path. Detail views stay under their tab. */
+function activeTabFor(pathname) {
+  if (pathname.startsWith('/history')) return 'history'
+  if (pathname.startsWith('/analysis')) return 'analysis'
+  if (pathname.startsWith('/profile')) return 'profile'
+  return 'snap'
 }
 
 function AppShell() {
   const { t, lang } = useLanguage()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  // The tab is derived from the URL rather than held in state, which is what
+  // makes the Android hardware back button (and browser back, and a bookmarked
+  // link) work at all — previously it was React state, so back exited the app.
+  const tab = activeTabFor(pathname)
   const [ready, setReady] = useState(false)
   const [user, setUser] = useState(null) // null = visitor (not signed in)
-  const [tab, setTab] = useState('snap')
+  // Not a route: 'analyzing' and 'results' are transient states of one capture,
+  // not places you can link someone to.
   const [phase, setPhase] = useState('capture')
   const [result, setResult] = useState(null)
   const [menuResult, setMenuResult] = useState(null)
@@ -77,6 +98,10 @@ function AppShell() {
   // True when the last analysis came back unpersisted for a client that still
   // thought it was signed in — i.e. the session cookie expired server-side.
   const [sessionExpired, setSessionExpired] = useState(false)
+  // Bumped whenever something changes the saved history, which is how the
+  // HistoryProvider knows to reload. A counter rather than an imperative
+  // refresh handle: this component renders the provider, so it can't consume it.
+  const [historyVersion, setHistoryVersion] = useState(0)
 
   // Visitor-only local state (lost on refresh, per the "no account" experience).
   const [localProfile, setLocalProfile] = useState(loadLocalProfile)
@@ -147,7 +172,9 @@ function AppShell() {
     if (visitorHistory.length === 0) {
       setShowEmptyDashboardModal(true)
     }
-  }, [ready, isAuthed])
+    // visitorHistory.length is a real dependency; initialLoadHandledRef above is
+    // what keeps this to one run, not the (previously incomplete) dep list.
+  }, [ready, isAuthed, visitorHistory.length])
 
   useEffect(() => {
     const up = () => setOnline(true)
@@ -221,10 +248,37 @@ function AppShell() {
     setShowSignInScreen(false)
   }
 
+  const onAuthExpired = useCallback(() => setUser(null), [])
+
   const doLogout = async () => {
     await logoutApi().catch(() => {})
     setUser(null)
     setVisitorHistory([])
+  }
+
+  // Anything derived from the account that lives on this device. Theme and
+  // language are left alone deliberately — they're preferences, not a record of
+  // the person, and resetting them would look like a bug rather than erasure.
+  const clearLocalTraces = () => {
+    ['mealProfile', 'dailyBudget', 'dbt_water_today', 'dbt_water_target'].forEach((key) =>
+      localStorage.removeItem(key),
+    )
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('dbt_seen_achievements_'))
+      .forEach((key) => localStorage.removeItem(key))
+  }
+
+  // The server has already erased the account and ended every session by the
+  // time this runs; this is purely the client catching up.
+  const onAccountDeleted = () => {
+    clearLocalTraces()
+    setUser(null)
+    setVisitorHistory([])
+    setLocalProfile(null)
+    setLocalBudget(DEFAULT_BUDGET)
+    setDashboard(null)
+    setPhase('capture')
+    navigate('/', { replace: true })
   }
 
   // Shared across analyze() and lookupBarcode(): whichever request started
@@ -233,6 +287,11 @@ function AppShell() {
   // requests are in flight, and whichever happens to resolve last wins the
   // results screen — even if the user has already moved on.
   const requestSeqRef = useRef(0)
+  // Lets the user stop an analysis. Separate from requestSeqRef, which only
+  // decides whether a *returning* response still matters — it cannot stop the
+  // request, so on a slow connection the app kept holding a server thread and
+  // the user's data plan for a result nobody was waiting for any more.
+  const abortRef = useRef(null)
 
   // Sign-in, profile setup, and the install prompt used to all fire the
   // moment the app loaded, stacking up to three blocking screens in front of
@@ -281,6 +340,7 @@ function AppShell() {
       setPhase('results')
       if (isAuthed && !expired) {
         fetchDashboardToday().then(setDashboard).catch(() => {})
+        setHistoryVersion((v) => v + 1)
       } else {
         // Visitors keep an in-session history (cleared on refresh).
         setVisitorHistory((prev) => [
@@ -303,6 +363,24 @@ function AppShell() {
     [isAuthed],
   )
 
+  /** Fresh AbortController per request; the previous one is already spent. */
+  const startRequest = useCallback(() => {
+    abortRef.current = new AbortController()
+    return abortRef.current.signal
+  }, [])
+
+  /**
+   * Stops the in-flight request and returns to the capture screen. Bumps the
+   * sequence too, so a response already on the wire is ignored rather than
+   * landing on a screen the user has left.
+   */
+  const cancelAnalysis = useCallback(() => {
+    requestSeqRef.current += 1
+    abortRef.current?.abort()
+    setError(null)
+    setPhase('capture')
+  }, [])
+
   const analyze = useCallback(
     async (file) => {
       const seq = ++requestSeqRef.current
@@ -313,16 +391,16 @@ function AppShell() {
       setError(null)
       try {
         const compressed = await compressImage(file)
-        const analysis = await analyzeImage(compressed, 'meal.jpg', lang)
+        const analysis = await analyzeImage(compressed, 'meal.jpg', lang, startRequest())
         if (seq !== requestSeqRef.current) return // superseded by a newer analysis
         handleAnalysisSuccess(analysis)
       } catch (e) {
-        if (seq !== requestSeqRef.current) return
+        if (seq !== requestSeqRef.current || e?.code === CANCELLED) return
         setError(e)
         setPhase('error')
       }
     },
-    [lang, handleAnalysisSuccess],
+    [lang, handleAnalysisSuccess, startRequest],
   )
 
   const lookupBarcode = useCallback(
@@ -334,16 +412,16 @@ function AppShell() {
       setPhase('analyzing')
       setError(null)
       try {
-        const analysis = await lookupBarcodeApi(code, servings, lang)
+        const analysis = await lookupBarcodeApi(code, servings, lang, startRequest())
         if (seq !== requestSeqRef.current) return
         handleAnalysisSuccess(analysis)
       } catch (e) {
-        if (seq !== requestSeqRef.current) return
+        if (seq !== requestSeqRef.current || e?.code === CANCELLED) return
         setError(e)
         setPhase('error')
       }
     },
-    [lang, handleAnalysisSuccess],
+    [lang, handleAnalysisSuccess, startRequest],
   )
 
   // Ranking a menu is deliberately NOT routed through handleAnalysisSuccess:
@@ -359,7 +437,7 @@ function AppShell() {
       setError(null)
       try {
         const compressed = await compressMenuImage(file)
-        const ranking = await rankMenuImage(compressed, 'menu.jpg', lang)
+        const ranking = await rankMenuImage(compressed, 'menu.jpg', lang, startRequest())
         if (seq !== requestSeqRef.current) return
         // Same distinction ResultsScreen relies on: persisted:false means
         // "not saved" for BOTH a plain never-signed-in visitor and a session
@@ -371,12 +449,12 @@ function AppShell() {
         setMenuResult(ranking)
         setPhase('menuResults')
       } catch (e) {
-        if (seq !== requestSeqRef.current) return
+        if (seq !== requestSeqRef.current || e?.code === CANCELLED) return
         setError(e)
         setPhase('error')
       }
     },
-    [lang, isAuthed],
+    [lang, isAuthed, startRequest],
   )
 
   const retry = () => {
@@ -401,8 +479,81 @@ function AppShell() {
     )
   }
 
+  const snapFlow =
+    phase === 'analyzing' ? (
+      <AnalyzingScreen
+        titleKey={lastMenuFile ? 'analyzing.titleMenu' : 'analyzing.title'}
+        flow={lastMenuFile ? 'menu' : lastBarcodeArgs ? 'barcode' : 'meal'}
+        onCancel={cancelAnalysis}
+      />
+    ) : phase === 'results' && result ? (
+      <ResultsScreen
+        result={result}
+        dailyBudget={dailyBudget}
+        goal={profileForm?.goal}
+        onSnapAnother={() => setPhase('capture')}
+        shareImageSource={lastFile}
+        banner={sessionExpired ? t('results.sessionExpired') : undefined}
+        // The warning belongs here, on the first result, rather than on the
+        // History tab where it used to live — by the time a visitor goes
+        // looking for their meals they have already logged the ones a refresh
+        // is about to take.
+        isVisitor={!isAuthed}
+        // A fresh analysis is saved for signed-in users, so it can be exported
+        // straight away. It used to require finding the meal again in history.
+        onExportPdf={result.entryId ? () => exportHistoryPdf(result.entryId) : undefined}
+        // A correction changes this meal's calories, so the dashboard and the
+        // history list are both stale until the cache is invalidated.
+        onResultCorrected={(corrected) => {
+          setResult(corrected)
+          setHistoryVersion((v) => v + 1)
+        }}
+      />
+    ) : phase === 'menuResults' && menuResult ? (
+      <MenuResultsScreen
+        result={menuResult}
+        onScanAnother={() => setPhase('capture')}
+        banner={sessionExpired ? t('menuResults.notSaved') : undefined}
+        shareImageSource={lastMenuFile}
+      />
+    ) : phase === 'error' ? (
+      <ErrorScreen error={error} onRetry={retry} onBack={() => setPhase('capture')} />
+    ) : phase === 'barcode' ? (
+      <BarcodeScanScreen
+        onConfirm={lookupBarcode}
+        onCancel={() => setPhase('capture')}
+        onTakePhotoInstead={() => setPhase('capture')}
+      />
+    ) : (
+      <>
+        <TodaySummaryCard
+          isVisitor={!isAuthed}
+          dashboard={dashboard}
+          visitorEntries={visitorHistory}
+          dailyBudget={dailyBudget}
+          profile={profileForm}
+        />
+        <CaptureScreen
+          online={online}
+          onPhoto={analyze}
+          onScanBarcode={() => setPhase('barcode')}
+          onScanMenu={rankMenu}
+        />
+      </>
+    )
+
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col bg-slate-50 dark:bg-slate-900">
+      {/* First thing in the tab order, visible only once focused. Without it a
+          keyboard or switch user tabs through the header and the whole account
+          menu again on every single screen. */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-slate-900 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white dark:focus:bg-slate-100 dark:focus:text-slate-900"
+      >
+        {t('nav.skipToContent')}
+      </a>
+
       <header className="flex items-center justify-between px-5 pb-2 pt-6">
         <div>
           <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
@@ -420,7 +571,10 @@ function AppShell() {
         />
       </header>
 
-      <main className="flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <main id="main" tabIndex={-1} className="flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))]">
+        {/* The two first-run interstitials are full-screen takeovers rather than
+            destinations — you can't link someone to "your sign-in prompt" — so
+            they short-circuit the route table instead of living in it. */}
         {showSignInScreen && !isAuthed ? (
           <SignInScreen onSkip={dismissSignInScreen} />
         ) : showProfileScreen ? (
@@ -431,106 +585,93 @@ function AppShell() {
             onSave={saveProfile}
             onCancel={hasProfile ? () => setShowProfileScreen(false) : dismissProfileScreen}
           />
-        ) : tab === 'history' ? (
-          <HistoryScreen
-            isVisitor={!isAuthed}
-            visitorEntries={visitorHistory}
-            onDeleteVisitorEntry={(id) =>
-              setVisitorHistory((prev) => prev.filter((e) => e.id !== id))
-            }
-            onAuthExpired={() => setUser(null)}
-            dailyBudget={dailyBudget}
-            goal={profileForm?.goal}
-          />
-        ) : tab === 'analysis' ? (
-          <AnalysisScreen
-            isVisitor={!isAuthed}
-            visitorEntries={visitorHistory}
-            onAuthExpired={() => setUser(null)}
-            dailyBudget={dailyBudget}
-            goal={isAuthed ? user.goal : null}
-          />
-        ) : tab === 'profile' ? (
-          <ProfilePage
-            user={user}
-            isVisitor={!isAuthed}
-            hasProfile={hasProfile}
-            dailyBudget={dailyBudget}
-            onEditProfile={() => setShowProfileScreen(true)}
-            onLogout={doLogout}
-          />
-        ) : phase === 'analyzing' ? (
-          <AnalyzingScreen titleKey={lastMenuFile ? 'analyzing.titleMenu' : 'analyzing.title'} />
-        ) : phase === 'results' && result ? (
-          <ResultsScreen
-            result={result}
-            dailyBudget={dailyBudget}
-            goal={profileForm?.goal}
-            onSnapAnother={() => setPhase('capture')}
-            shareImageSource={lastFile}
-            banner={sessionExpired ? t('results.sessionExpired') : undefined}
-          />
-        ) : phase === 'menuResults' && menuResult ? (
-          <MenuResultsScreen
-            result={menuResult}
-            onScanAnother={() => setPhase('capture')}
-            banner={sessionExpired ? t('menuResults.notSaved') : undefined}
-          />
-        ) : phase === 'error' ? (
-          <ErrorScreen error={error} onRetry={retry} onBack={() => setPhase('capture')} />
-        ) : phase === 'barcode' ? (
-          <BarcodeScanScreen
-            onConfirm={lookupBarcode}
-            onCancel={() => setPhase('capture')}
-            onTakePhotoInstead={() => setPhase('capture')}
-          />
         ) : (
-          <>
-            <TodaySummaryCard
-              isVisitor={!isAuthed}
-              dashboard={dashboard}
-              visitorEntries={visitorHistory}
-              dailyBudget={dailyBudget}
-              profile={profileForm}
+          <HistoryProvider
+            isVisitor={!isAuthed}
+            visitorEntries={visitorHistory}
+            onAuthExpired={onAuthExpired}
+            version={historyVersion}
+          >
+          <Routes>
+            <Route index element={snapFlow} />
+            <Route
+              path="history/*"
+              element={
+                <HistoryScreen
+                  isVisitor={!isAuthed}
+                  onDeleteVisitorEntry={(id) =>
+                    setVisitorHistory((prev) => prev.filter((e) => e.id !== id))
+                  }
+                  dailyBudget={dailyBudget}
+                  goal={profileForm?.goal}
+                />
+              }
             />
-            <CaptureScreen
-              online={online}
-              onPhoto={analyze}
-              onScanBarcode={() => setPhase('barcode')}
-              onScanMenu={rankMenu}
+            <Route
+              path="analysis"
+              element={
+                <AnalysisScreen
+                  isVisitor={!isAuthed}
+                  dailyBudget={dailyBudget}
+                  goal={isAuthed ? user.goal : null}
+                />
+              }
             />
-          </>
+            <Route
+              path="profile"
+              element={
+                <ProfilePage
+                  user={user}
+                  isVisitor={!isAuthed}
+                  hasProfile={hasProfile}
+                  dailyBudget={dailyBudget}
+                  onEditProfile={() => setShowProfileScreen(true)}
+                  onLogout={doLogout}
+                  onAccountDeleted={onAccountDeleted}
+                />
+              }
+            />
+            {/* An unknown path is most likely a stale bookmark or a mistyped
+                deep link; replace so back doesn't bounce between the two. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+          </HistoryProvider>
         )}
       </main>
 
       {/* pb-[env(...)] keeps the tab row clear of the iPhone home indicator in standalone mode */}
-      <nav className="fixed inset-x-0 bottom-0 z-10 mx-auto flex max-w-md border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-slate-700 dark:bg-slate-800/95">
+      <nav
+        aria-label={t('nav.sections')}
+        className="fixed inset-x-0 bottom-0 z-10 mx-auto flex max-w-md border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-slate-700 dark:bg-slate-800/95"
+      >
         <TabButton
           active={tab === 'snap'}
           label={t('nav.snap')}
           icon="📸"
           onClick={() => {
-            setTab('snap')
+            // Tapping Snap always returns to a fresh capture, even from a
+            // results screen — same as before routing.
             setPhase('capture')
+            navigate('/')
           }}
         />
         <TabButton
           active={tab === 'history'}
           label={t('nav.history')}
           icon="🗓️"
-          onClick={() => setTab('history')}
+          onClick={() => navigate('/history')}
         />
         <TabButton
           active={tab === 'analysis'}
           label={t('nav.analysis')}
           icon="📊"
-          onClick={() => setTab('analysis')}
+          onClick={() => navigate('/analysis')}
         />
         <TabButton
           active={tab === 'profile'}
           label={t('nav.profile')}
           icon="👤"
-          onClick={() => setTab('profile')}
+          onClick={() => navigate('/profile')}
         />
       </nav>
 
@@ -549,15 +690,36 @@ function AppShell() {
   )
 }
 
+/**
+ * One destination in the bottom bar.
+ *
+ * The review asked for `role="tablist"`/`role="tab"`/`aria-selected` here.
+ * **That is the wrong role for this bar** and it is not just pedantry: `tab`
+ * promises an associated `tabpanel` that it shows and hides, which a screen
+ * reader will then look for via `aria-controls`. These four buttons change the
+ * route — there are no panels, and jsx-a11y rejects the landmark/role
+ * combination outright.
+ *
+ * What the review actually complained about is real, though: four bare buttons
+ * announced with no sense that they are a set or which one you are on. The
+ * navigation landmark now carries a name, and the current destination is marked
+ * with `aria-current="page"` — the standard for exactly this, and it says the
+ * true thing rather than a convenient one.
+ *
+ * The emoji is `aria-hidden`. It is decoration beside a text label that already
+ * says the same thing, and unhidden it was read out as "camera with flash
+ * emoji, Snap".
+ */
 function TabButton({ active, label, icon, onClick }) {
   return (
     <button
+      aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={`flex flex-1 flex-col items-center gap-0.5 py-3 text-xs font-medium ${
         active ? 'text-grade-aplus dark:text-green-400' : 'text-slate-500 dark:text-slate-400'
       }`}
     >
-      <span className="text-lg leading-none">{icon}</span>
+      <span aria-hidden="true" className="text-lg leading-none">{icon}</span>
       {label}
     </button>
   )

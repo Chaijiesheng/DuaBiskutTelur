@@ -1,11 +1,15 @@
 package com.duabiskuttelur.client;
 
+import com.duabiskuttelur.config.AppMetrics;
 import com.duabiskuttelur.config.AppProperties;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.util.Optional;
@@ -35,11 +39,14 @@ public class UsdaClient {
     private final AppProperties props;
     private final RestClient restClient;
 
-    public UsdaClient(AppProperties props) {
+    private final MeterRegistry meters;
+
+    public UsdaClient(AppProperties props, MeterRegistry meters) {
         this.props = props;
+        this.meters = meters;
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(props.getConnectTimeoutMs());
-        factory.setReadTimeout(props.getReadTimeoutMs());
+        factory.setReadTimeout(props.getUsdaReadTimeoutMs());
         this.restClient = RestClient.builder()
                 .baseUrl(props.getUsdaBaseUrl())
                 .requestFactory(factory)
@@ -54,6 +61,38 @@ public class UsdaClient {
         if (!props.hasUsdaKey()) {
             return Optional.empty();
         }
+        Timer.Sample sample = Timer.start(meters);
+        Outcome outcome = search(searchTerm);
+        sample.stop(Timer.builder(AppMetrics.USDA_LOOKUP)
+                .description("One FoodData Central lookup")
+                .tag(AppMetrics.TAG_OUTCOME, outcome.label())
+                .register(meters));
+        return outcome.value();
+    }
+
+    /**
+     * The lookup itself, reporting <em>why</em> it came back empty as well as
+     * that it did.
+     *
+     * <p>The three empty cases are worth separating because they mean completely
+     * different things and all three end as "estimated" nutrition: a genuine
+     * miss is expected for an unusual local dish, an {@code error} means USDA was
+     * unreachable, and a {@code client_error} means the key or the query shape is
+     * wrong — which silently downgrades <em>every</em> food to a model estimate
+     * and, without this tag, looks identical to the app simply not knowing much
+     * about Malaysian food.
+     */
+    private record Outcome(Optional<NutrientsPer100g> value, String label) {
+        static Outcome of(NutrientsPer100g nutrients) {
+            return new Outcome(Optional.of(nutrients), AppMetrics.OUTCOME_HIT);
+        }
+
+        static Outcome empty(String label) {
+            return new Outcome(Optional.empty(), label);
+        }
+    }
+
+    private Outcome search(String searchTerm) {
         int attempts = props.getUsdaRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             try {
@@ -63,23 +102,44 @@ public class UsdaClient {
                                 .queryParam("api_key", props.getUsdaApiKey())
                                 .queryParam("query", searchTerm)
                                 .queryParam("pageSize", 1)
+                                // Emitted as three separate dataType params, which is
+                                // what FDC wants — verified against the live API:
+                                // repeated params return 841 hits for "chocolate milk",
+                                // all Survey (FNDDS)/SR Legacy, while dropping the
+                                // filter returns 150k hits that are entirely Branded.
+                                // The docs describe a comma-separated list, and that
+                                // form works too — but only when the spaces inside
+                                // "Survey (FNDDS)" and "SR Legacy" are percent-encoded;
+                                // comma-joined with '+' for spaces is a 400. Since a
+                                // 400 here is swallowed below and silently downgrades
+                                // every food to a model estimate, this stays as it is.
+                                // UsdaClientTest pins the emitted shape.
                                 .queryParam("dataType", "Survey (FNDDS)", "SR Legacy", "Foundation")
                                 .build())
                         .retrieve()
                         .body(JsonNode.class);
                 if (response == null) {
-                    return Optional.empty();
+                    return Outcome.empty(AppMetrics.OUTCOME_MISS);
                 }
                 JsonNode foods = response.path("foods");
                 if (!foods.isArray() || foods.isEmpty()) {
-                    return Optional.empty();
+                    return Outcome.empty(AppMetrics.OUTCOME_MISS);
                 }
-                return Optional.of(parseFood(foods.get(0)));
+                return Outcome.of(parseFood(foods.get(0)));
+            } catch (HttpClientErrorException e) {
+                // A rejected request (bad key, malformed query) fails the same
+                // way every time — retrying just spends the caller's latency
+                // budget to be told no again.
+                log.warn("USDA rejected the lookup for '{}': {}", searchTerm, e.getStatusCode());
+                return Outcome.empty(AppMetrics.OUTCOME_CLIENT_ERROR);
             } catch (Exception e) {
                 log.warn("USDA lookup failed for '{}' (attempt {}/{}): {}", searchTerm, attempt, attempts, e.getMessage());
+                if (attempt < attempts) {
+                    sleepBriefly(attempt);
+                }
             }
         }
-        return Optional.empty();
+        return Outcome.empty(AppMetrics.OUTCOME_ERROR);
     }
 
     private NutrientsPer100g parseFood(JsonNode food) {
@@ -101,5 +161,14 @@ public class UsdaClient {
         return new NutrientsPer100g(
                 food.path("description").asText(""),
                 calories, protein, carbs, fat, fiber, sugar, sodium);
+    }
+
+    /** Immediate re-fire helps nothing if the cause was load; a short pause costs little and might. */
+    private static void sleepBriefly(int attempt) {
+        try {
+            Thread.sleep(200L * attempt);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

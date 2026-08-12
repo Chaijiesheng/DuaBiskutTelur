@@ -3,6 +3,7 @@ import confetti from 'canvas-confetti'
 import { prefersReducedMotion } from '../motionPreference.js'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import { useTheme } from '../theme/ThemeContext.jsx'
+import { hasMeaningfulSpread, meanConfidence, scoreSpread } from '../confidence.js'
 
 // Per-theme so both pass WCAG AA: light values are ≥4.5:1 on white (the
 // history chips render them at 14px bold), dark values are checked against
@@ -19,7 +20,7 @@ const COUNT_MS = 1200
  * Score counts up from 0 to the final number, then the letter grade stamps in.
  * A and A+ earn a confetti burst.
  */
-export default function GradeReveal({ score, grade, encouragement }) {
+export default function GradeReveal({ score, grade, encouragement, foods }) {
   const { t } = useLanguage()
   const { theme } = useTheme()
   const [displayScore, setDisplayScore] = useState(0)
@@ -62,6 +63,13 @@ export default function GradeReveal({ score, grade, encouragement }) {
   }, [showGrade, grade])
 
   const color = GRADE_COLORS[theme][grade] ?? '#64748b'
+  // The score itself is deterministic arithmetic and is not adjusted here. What
+  // widens is the claim: when the model was unsure it identified the food
+  // correctly, a bare "78" overstates how precisely this meal is known. The
+  // band is presentation only — the number, the grade and the confetti all
+  // still key off the exact score.
+  const spread = scoreSpread(meanConfidence(foods))
+  const showSpread = hasMeaningfulSpread(spread)
 
   return (
     <div className="flex flex-col items-center gap-2 py-6">
@@ -70,12 +78,16 @@ export default function GradeReveal({ score, grade, encouragement }) {
           row is hidden from them and this one line announces the final result. */}
       {showGrade && (
         <p className="sr-only" role="status">
-          {t('results.scoreAnnouncement', score, grade)}
+          {showSpread
+            ? t('results.scoreAnnouncementApprox', score, spread, grade)
+            : t('results.scoreAnnouncement', score, grade)}
         </p>
       )}
       <div className="flex items-end gap-3" aria-hidden="true">
         <span className="text-6xl font-black tabular-nums text-slate-900 dark:text-slate-100">{displayScore}</span>
-        <span className="pb-2 text-sm text-slate-500 dark:text-slate-400">/ 100</span>
+        <span className="pb-2 text-sm text-slate-500 dark:text-slate-400">
+          {showSpread ? `± ${spread}` : ''} / 100
+        </span>
         {showGrade && (
           <span
             className="animate-stamp rounded-2xl border-4 px-4 pb-1 pt-2 text-5xl font-black leading-none"
@@ -85,6 +97,11 @@ export default function GradeReveal({ score, grade, encouragement }) {
           </span>
         )}
       </div>
+      {showGrade && showSpread && (
+        <p className="max-w-xs text-center text-xs text-slate-500 dark:text-slate-400">
+          {t('results.scoreSpread')}
+        </p>
+      )}
       {showGrade && (
         <p className="mt-1 max-w-xs text-center text-sm font-medium text-slate-600 dark:text-slate-300">
           {(grade === 'A' || grade === 'A+') && '🎉 '}

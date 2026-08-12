@@ -1,5 +1,7 @@
 package com.duabiskuttelur.service;
 
+import com.duabiskuttelur.persistence.LocalFoodRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.duabiskuttelur.client.OpenFoodFactsClient;
 import com.duabiskuttelur.config.AppProperties;
 import com.duabiskuttelur.config.ScoringProperties;
@@ -8,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +27,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * is safe for the anonymous-visitor cases exercised here.
  */
 class BarcodeLookupServiceTest {
+
+    /**
+     * A local database with nothing in it — the shipped state. Exercises the
+     * local-first branch and proves it falls through to USDA rather than
+     * short-circuiting resolution.
+     */
+    private static LocalFoodService emptyLocalFoods() {
+        LocalFoodRepository repository = Mockito.mock(LocalFoodRepository.class);
+        Mockito.when(repository.findByCanonicalName(Mockito.anyString())).thenReturn(java.util.Optional.empty());
+        Mockito.when(repository.findByAlias(Mockito.anyString())).thenReturn(java.util.Optional.empty());
+        return new LocalFoodService(repository, new SimpleMeterRegistry());
+    }
 
     private HttpServer server;
 
@@ -65,10 +80,10 @@ class BarcodeLookupServiceTest {
         OpenFoodFactsClient client = new OpenFoodFactsClient(props);
         ScoringService scoringService = new ScoringService(new ScoringProperties());
         FeedbackService feedbackService = new FeedbackService(
-                context -> { throw new UnsupportedOperationException("Gemini not expected for barcode results"); },
+                (context, lang) -> { throw new UnsupportedOperationException("Gemini not expected for barcode results"); },
                 props, new ScoringProperties());
         AnalysisService analysisService = new AnalysisService(
-                null, null, scoringService, feedbackService, null, null, null, props, new ObjectMapper());
+                null, null, null, emptyLocalFoods(), scoringService, feedbackService, null, null, null, props, new ObjectMapper(), new SimpleMeterRegistry());
 
         return new BarcodeLookupService(client, scoringService, feedbackService, analysisService);
     }

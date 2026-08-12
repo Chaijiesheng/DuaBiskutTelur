@@ -48,6 +48,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class AnalyzeEndpointTest {
 
+    /**
+     * A user of its own for the 55-meal cap test — the shared googleUser()
+     * accumulates history across every test in this class, which would make the
+     * counts below depend on execution order.
+     */
+    private static RequestPostProcessor recentWindowUser() {
+        return oauth2Login().attributes(attrs -> {
+            attrs.put("sub", "recent-window-sub");
+            attrs.put("email", "recent@example.com");
+            attrs.put("name", "Recent Window");
+        });
+    }
+
     /** Authenticate requests as a fixed Google user so history is attributed. */
     private static RequestPostProcessor googleUser() {
         return oauth2Login().attributes(attrs -> {
@@ -86,7 +99,7 @@ class AnalyzeEndpointTest {
     @BeforeEach
     void resetMocks() {
         Mockito.reset(visionClient, feedbackClient);
-        Mockito.when(feedbackClient.generateFeedback(anyString())).thenReturn(new FeedbackResult(
+        Mockito.when(feedbackClient.generateFeedback(anyString(), anyString())).thenReturn(new FeedbackResult(
                 List.of("Good protein content"),
                 List.of("High sodium"),
                 List.of("Add ulam next time"),
@@ -94,8 +107,8 @@ class AnalyzeEndpointTest {
     }
 
     private static IdentifiedFood identifiedFood(String name, String group, boolean fried, double grams) {
-        return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams,
-                name, 150, 10, 15, 6, 1.5, 2, 300, group, fried, 0.9);
+        return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams, grams * 0.8, grams * 1.2,
+                name, 150, 10, 15, 6, 1.5, 2, 300, group, fried ? "deep-fried" : "steamed", 0.9);
     }
 
     @Test
@@ -433,5 +446,48 @@ class AnalyzeEndpointTest {
         mockMvc.perform(multipart("/api/analyze").file(empty).with(googleUser()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+    }
+
+    /**
+     * The weekly trend used to be derived from /api/history, which stops at
+     * fifty rows — so a user logging often had their "total this week" and
+     * "average daily" silently computed from a truncated set, with nothing on
+     * screen to suggest the number was short. This window is bounded by time
+     * instead, so it can be complete.
+     */
+    @Test
+    void recentWindowIsNotCappedAtTheHistoryListLimit() throws Exception {
+        Mockito.when(visionClient.identifyFoods(any(), anyString()))
+                .thenReturn(List.of(identifiedFood("Rice", "grain", false, 200)));
+
+        // Comfortably past the fifty-row history cap.
+        MockMultipartFile image = new MockMultipartFile("image", "meal.jpg", "image/jpeg", FAKE_JPEG);
+        for (int i = 0; i < 55; i++) {
+            mockMvc.perform(multipart("/api/analyze").file(image).with(recentWindowUser()))
+                    .andExpect(status().isOk());
+        }
+
+        mockMvc.perform(get("/api/history").with(recentWindowUser()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(50));
+
+        mockMvc.perform(get("/api/history/recent").with(recentWindowUser()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(55))
+                .andExpect(jsonPath("$[0].calories").exists())
+                .andExpect(jsonPath("$[0].createdAt").exists());
+    }
+
+    @Test
+    void recentWindowRejectsAnAbsurdDayCount() throws Exception {
+        mockMvc.perform(get("/api/history/recent?days=3650").with(googleUser()))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/history/recent?days=0").with(googleUser()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void recentWindowRequiresSigningIn() throws Exception {
+        mockMvc.perform(get("/api/history/recent")).andExpect(status().isUnauthorized());
     }
 }

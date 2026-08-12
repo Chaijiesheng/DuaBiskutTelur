@@ -1,0 +1,6 @@
+# Build output and local runtime state — the image builds from src/ and pom.xml
+# only. Without this they ride along in the build context, which is slow and
+# makes `COPY` layer caching depend on whatever happens to be on the machine.
+target/
+data/
+*.log

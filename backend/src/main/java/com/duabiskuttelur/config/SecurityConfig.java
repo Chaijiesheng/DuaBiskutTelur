@@ -33,9 +33,25 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/oauth2/**", "/login/**").permitAll()
+                        // Health for the container's HEALTHCHECK and any external
+                        // monitor; prometheus for a scraper on the compose network.
+                        // Neither is reachable from outside it: the backend port is
+                        // not published and nginx returns 404 for /actuator.
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                        .requestMatchers("/actuator/prometheus").permitAll()
+                        // Everything else under /actuator is refused outright, so
+                        // widening management.endpoints.web.exposure.include - by
+                        // accident, or to debug something - cannot on its own put
+                        // env, beans, heapdump or threaddump on the network. Both
+                        // this line and the exposure list have to change together.
+                        .requestMatchers("/actuator/**").denyAll()
                         // Visitors (not signed in) can still analyze a meal, scan a barcode, or rank a menu.
                         .requestMatchers(HttpMethod.POST, "/api/analyze").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/barcode/**").permitAll()
+                        // Only the two side-effect-free/committing barcode routes, named
+                        // individually — a blanket /api/barcode/** would silently re-open
+                        // anything added under that prefix later.
+                        .requestMatchers(HttpMethod.GET, "/api/barcode/*/product").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/barcode/lookup").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/menu/rank").permitAll()
                         // History, profile and identity are per-user, so require login.
                         .requestMatchers("/api/**").authenticated()

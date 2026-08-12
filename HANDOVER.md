@@ -68,34 +68,57 @@ the AI vendor can be swapped without touching the service layer.
    arithmetic over resolved nutrition facts (`ScoringService`, thresholds
    tunable in `application.yml` under `scoring.*`). AI identifies foods and
    writes feedback prose — it never decides the score, which also limits the
-   blast radius of prompt injection via photos.
+   blast radius of prompt injection via photos. That is the load-bearing
+   defense; `UntrustedText` and the fenced prompt are the second line, not the
+   first.
 2. **Two independent resilience layers for Gemini** (`GeminiClient`):
    key rotation on 429 (per-key cooldowns, primary preferred after cooldown)
    and model fallback on 5xx/timeouts (overload is model-side, so key rotation
    wouldn't help). Exponential backoff only when every key×model fails, then a
-   friendly 503 (`ANALYZER_BUSY`).
+   friendly 503 (`ANALYZER_BUSY`). All of it sits under a **total wall-clock
+   budget** (`app.gemini-budget-ms`), because those layers multiply: the full
+   schedule is backoff rounds × models × keys calls, each able to burn a read
+   timeout against a provider that accepts connections but never answers. The
+   budget is what keeps a provider outage from becoming an app outage by way
+   of an exhausted servlet thread pool.
 3. **Login is optional.** Visitors get the full analyze flow; nothing is
    persisted for them (no DB row at all). Signing in adds persistent history,
    profile, and targets.
-4. **Nutrition sources are labeled.** Every item carries `source`:
-   `usda` (database match), `estimated` (vision-model fallback), or `barcode`
-   (label data) — surfaced in the UI as a trust signal.
-5. **H2 in TCP-server mode in production** (started from `main()` when
+4. **Nutrition sources are labeled.** Every item carries `source`, surfaced in
+   the UI as a trust signal, in descending order of trust: `local` (the curated
+   Malaysian composition table — the dish itself, with a citation), `barcode`
+   (label data), `usda` (a FoodData Central match, which for a local dish is the
+   nearest generic it could find), `estimated` (vision-model fallback).
+   Resolution goes local → USDA → model. The local table currently ships
+   empty — see Outstanding issues.
+5. **Resolution is pinned per dish** (`NutritionCacheService`, table
+   `nutrition_cache`). Resolving a dish is otherwise a lottery — the USDA search
+   can return a different top match or time out, and the model's fallback
+   estimate is regenerated on every call — so the same dish produced different
+   calories, and sometimes a different grade/tier, on each scan. The first
+   resolution per canonicalized dish name is stored per 100g (with
+   `foodGroup`/`fried`/`confidence`, which also feed `ScoringService`) and
+   replayed forever after; each scan only scales it to its own portion. Menu
+   scans additionally replay the cached portion, since a menu shows no plate to
+   size one from. The trade-off is that a dish first resolved during a USDA
+   outage stays on the model estimate — delete the row (or set
+   `app.nutrition-cache-enabled=false`) to re-resolve.
+6. **H2 in TCP-server mode in production** (started from `main()` when
    `H2_TCP_PORT` is set) because `AUTO_SERVER=TRUE` silently rejects real
    remote SQL clients. Local dev uses the plain file URL from
    `application.yml`; production overrides via `SPRING_DATASOURCE_URL`.
-6. **Same-origin production, CORS only for dev.** nginx proxies `/api` so the
+7. **Same-origin production, CORS only for dev.** nginx proxies `/api` so the
    browser never makes a cross-origin call in production; the CORS allowlist
    contains only the Vite dev server by default (`app.cors-allowed-origins`).
-7. **Explicit camera/gallery chooser** on mobile — the `capture` attribute
+8. **Explicit camera/gallery chooser** on mobile — the `capture` attribute
    behaves inconsistently across Android/iOS, so the app renders its own
    bottom sheet with two file inputs.
-8. **Service worker never intercepts auth or API navigations**
+9. **Service worker never intercepts auth or API navigations**
    (`navigateFallbackDenylist` for `/api`, `/oauth2`, `/login/oauth2`,
    `/logout`) — a cached-SPA-served-instead-of-OAuth-redirect bug motivated
    this. App updates apply through a gate (`swUpdateGate.js`) so a deploy
    never reloads the page mid-analysis or mid-scan.
-9. **Time zone is server-global.** Every "today"/streak boundary uses
+10. **Time zone is server-global.** Every "today"/streak boundary uses
    `ZoneId.systemDefault()`; the container pins `TZ` in `docker-compose.yml`.
    Known limitation for travelling users; acceptable single-market tradeoff.
 
@@ -107,14 +130,21 @@ backend/
     config/        AppProperties, ScoringProperties, SecurityConfig, OAuth user service
     client/        GeminiClient (+key pool), UsdaClient, OpenFoodFactsClient, interfaces
     service/       AnalysisService (orchestrator), ScoringService, FeedbackService,
-                   BarcodeLookupService, DashboardService, AchievementsService,
-                   WaterService, WeightService, UserService, PdfReportService,
-                   ThumbnailService, CalorieBudget, FoodKeywords
-    persistence/   Entities + Spring Data repositories (user, meal, water, weight)
-    controller/    Analysis, Account, Barcode, Water, Weight controllers
+                   BarcodeLookupService, MenuRankingService, NutritionCacheService,
+                   DashboardService, AchievementsService, WaterService,
+                   WeightService, UserService, AccountDataService (export/erase),
+                   PdfReportService, ThumbnailService, CalorieBudget, FoodKeywords
+    persistence/   Entities + Spring Data repositories (user, meal, menu scan,
+                   nutrition cache, water, weight)
+    controller/    Analysis, Account (incl. data export/deletion), Barcode,
+                   Water, Weight controllers
   src/main/resources/
     application.yml, db/migration/ (Flyway)
-  src/test/java/   14 test classes (unit + MockMvc end-to-end + embedded-server tests)
+  src/test/java/   28 test classes (unit + MockMvc end-to-end + embedded-server +
+                   Flyway-against-real-H2 migration/index tests)
+  src/main/java/db/migration/  Java Flyway migrations (V8 repairs mislabelled
+                   beverage/coffee flags — the fix needs per-item names out of
+                   result_json, which SQL can't reach)
 frontend/
   src/
     App.jsx        App shell: auth state, tabs, analyze flow, interstitials
@@ -162,6 +192,7 @@ boot for UI development.
 | `USDA_API_KEY` | Optional | Nutrition lookups; without it, model estimates are used |
 | `GOOGLE_CLIENT_ID/SECRET` | For sign-in | OAuth Web client; redirect URI `https://<your-domain>/login/oauth2/code/google` |
 | `CORS_ALLOWED_ORIGINS` | Optional | Extra credentialed origins (not needed in the standard setup) |
+| `NUTRITION_CACHE_ENABLED` | Optional | Default `true`; `false` makes every scan re-resolve nutrition instead of replaying the pinned values |
 | `H2_TCP_PORT` / `H2_TCP_BASEDIR` | Production | Start the H2 TCP server for SQL tools |
 | `SPRING_DATASOURCE_URL` | Production | Point the app at the TCP server URL |
 | `TZ` | Production | The market's time zone — all daily boundaries use it |
@@ -196,6 +227,16 @@ layer `CACHED` (including `COPY . .`) despite changed files — pass
 `--no-cache` for frontend builds, or verify the served asset hash matches the
 local `vite build` output.
 
+**Do not `docker builder prune` before a deploy.** Learned the expensive way on
+2026-08-07: the disk was at 80% so the build cache was pruned to make room,
+which reclaimed 11 GB and took a routine rebuild from ~3 minutes to ~40. The
+costly layer is the backend's `apt-get install curl` (for the HEALTHCHECK):
+`ports.ubuntu.com` serves this ARM VM at roughly 35 kB/s, so that one step alone
+took **22 minutes** from cold. `docker image prune -f` (dangling images only) is
+safe and was enough; the builder cache is what makes the second deploy fast.
+If that layer needs rebuilding often, replacing the apt install with a base
+image that already ships curl would remove the worst of it.
+
 Nightly DB backups: `ops/backup-db.sh` via cron on the host (see `ops/README.md`).
 
 ## 8. Android app (TWA)
@@ -224,16 +265,27 @@ Note: JDK 17 specifically is required (AGP rejects 21+); always invoke
 ## 9. Testing
 
 ```bash
-cd backend && mvn test        # full suite: scoring bands, endpoint E2E (MockMvc),
-                              # Gemini timeout repro (embedded HTTP server),
-                              # cookie-flags invariant (real servlet container)
+cd backend && mvn test        # 277 tests: scoring bands, endpoint E2E (MockMvc),
+                              # Gemini timeout/bulkhead repro (embedded HTTP server),
+                              # prompt-injection containment, metric outcomes and
+                              # actuator exposure, index usage against
+                              # a real planner (every repository query, enforced
+                              # by a roster), cookie-flags invariant (real
+                              # servlet container)
+cd frontend && npm run lint   # eslint (react, react-hooks, jsx-a11y)
+cd frontend && npm run test   # 109 tests: calorie-budget and macro-target parity,
+                              # history cache, loading-skeleton a11y and
+                              # motion gating, analysis-stage timeline,
+                              # cancel-vs-network distinction, barcode input
+                              # validation, share-control state sharing,
+                              # confidence thresholds, portion-correction
+                              # bookkeeping
 cd frontend && npm run build  # production build
 node scripts/check-i18n-parity.mjs   # en/zh/ms dictionary key parity (also in CI)
 ```
 
-CI (`.github/workflows/ci.yml`) runs backend tests and the frontend
-build+parity check on every push and pull request. There are currently **no
-frontend unit tests** — see Outstanding issues.
+CI (`.github/workflows/ci.yml`) runs all of the above on every push and pull
+request.
 
 ## 10. Known limitations
 
@@ -241,7 +293,11 @@ frontend unit tests** — see Outstanding issues.
   (same H2 DB, 30-day cookie) rather than JVM heap, so signing in with Google
   survives a backend restart/redeploy. The exit path, if ever needed, is
   Postgres (swap the datasource; Spring Session JDBC works unchanged).
-- **Server-global time zone** (decision #9) — travelling users' "today" follows
+- **Pinned nutrition never self-corrects** (decision #5) — a dish whose first
+  resolution happened during a USDA outage keeps the model's estimate until its
+  `nutrition_cache` row is deleted. There is no TTL or admin UI for this yet;
+  it's a `DELETE FROM nutrition_cache WHERE canonical_name = ...`.
+- **Server-global time zone** (decision #10) — travelling users' "today" follows
   the server's market time zone.
 - **PWA update lag**: after a deploy, already-open clients pick up the new
   build via the gated auto-update; a full close-and-reopen is occasionally
@@ -258,23 +314,887 @@ frontend unit tests** — see Outstanding issues.
 From the production-readiness and engineering reviews (details in the review
 documents / issue tracker):
 
-1. Barcode logging happens on a GET (`/api/barcode/{code}`) — should be a POST
-   (HTTP safety; prefetchers can silently log meals).
-2. `water_entry` lacks `UNIQUE(user_id, date)` — concurrent first-taps can
-   create duplicate rows that 500 the water endpoints for the day. Needs a V3
-   migration (+ indexes on all `user_id` query paths, + FKs).
-3. `GeminiClient.callWithRetry` has no total wall-clock budget — a slow
-   provider can hold request threads for minutes.
-4. Open Food Facts outages are reported as "product not found" (404) instead
+1. No foreign keys on any `user_id` column, and **on H2 they are not worth
+   adding**. This was tried and backed out with a measurement: H2 creates its
+   own single-column index for a foreign key and refuses to let you drop it
+   ("index belongs to constraint"), even when a composite index already leads
+   with that column. The planner then prefers the narrower index for
+   `WHERE user_id = ?`, so the `ORDER BY created_at DESC` reads lose their
+   index ordering and go back to sorting — undoing V7 on the history list,
+   achievements and menu history (`QueryIndexTest` fails on exactly those three
+   when the constraints are added). Postgres does *not* auto-create FK indexes,
+   so this becomes free on the exit path and should be revisited there.
+   **Re-measured, not remembered** — H2 names the refusal outright (`Index
+   "FK_MEAL_ANALYSIS_USER_INDEX_1" belongs to constraint
+   "FK_MEAL_ANALYSIS_USER"`), and only the three pure `ORDER BY` reads regress;
+   the two range reads (`created_at BETWEEN`, `logged_at BETWEEN`) keep the
+   composite index either way, because the range predicate makes it plainly
+   better. Also worth knowing for the Postgres port: with the FK in place,
+   `DELETE FROM app_user` is *rejected* while meals exist, since
+   `meal_analysis`'s FK cannot cascade — its `user_id` is nullable for pre-login
+   rows — so the explicit ordered deletion below stays necessary regardless.
+   Meanwhile the integrity is upheld in code: deletion removes children
+   explicitly, and that is now enforced rather than merely documented.
+   `AccountDeletionCompletenessTest` asks the live schema which tables carry a
+   `user_id` and fails when one is not covered — a cascade cannot be forgotten,
+   a hand-written list can, and the symptom would be personal data surviving an
+   erasure request with nothing to show for it. Note `meal_analysis.user_id` is
+   also nullable for pre-login rows, which would want cleaning up first
+   regardless.
+2. Open Food Facts outages are reported as "product not found" (404) instead
    of a retryable 503.
-5. Frontend: no routing/back-button integration (Android back exits the app);
-   no result-correction UX; visitor session history is not migrated into the
-   account on first sign-in.
-6. No account deletion / data export endpoints (privacy compliance).
-7. `FoodKeywords` matches substrings ("steak" contains "tea"), corrupting the
-   denormalized beverage/coffee flags for some meals.
-8. PDF export is English-only and its Helvetica font cannot render Chinese
+3. Visitor session history is not migrated into the account on first sign-in —
+   the worst possible moment to lose someone's data. (The result-correction half
+   of this item is closed; see below.)
+4. `react-router-dom` has no advisory-free release: <=7.17 carries a
+   client-side open redirect via backslash in `<Link>`/`useNavigate`, and
+   >=7.12 carries an RSC-mode CSRF bypass. Pinned to 7.18.2 because this is a
+   pure client SPA — no RSC, no SSR — so the newer advisory is unreachable here
+   while the older one is not. `npm audit --omit=dev` therefore reports 2 high
+   findings that are both RSC-only. Re-check when a clean release lands.
+5. `/api/account/export` loads a user's entire history, CLOBs included, in
+   memory. Unavoidable in shape — an export has to be complete — but it wants a
+   streaming write before heavy accounts exist.
+6. PDF export is English-only and its Helvetica font cannot render Chinese
    meal content.
+7. A menu scan still holds a request thread through its nutrition resolution,
+   which the Gemini bulkhead does not cover (that slot is released when the
+   vision call returns). Now bounded rather than unbounded — see below — but
+   the nginx rate limit is what actually caps concurrent menu scans.
+8. Rate limiting lives only in `nginx.conf`, so it disappears if the backend
+   is ever run outside this Compose setup or fronted differently. A
+   backend-side limiter (e.g. Bucket4j on the three `permitAll` endpoints)
+   would make the limit a property of the application instead.
+9. Two configured Gemini fallback models are dead, found while verifying the
+   response schema against the live API: `gemini-2.5-flash-lite` returns "no
+   longer available to new users", and `gemini-2.0-flash` /
+   `gemini-2.0-flash-lite` return quota-exceeded on the current keys. The chains
+   in `application.yml` therefore have fewer real fallbacks than they look like
+   they do — `gemini-flash-latest` (→ 3.6) and `gemini-flash-lite-latest`
+   (→ 3.5-lite) are carrying them alone. Worth pruning and re-picking.
+10. Model confidence is poorly calibrated — it clusters near 0.95 regardless of
+    difficulty — so the AI2 thresholds (0.6 / 0.45) are currently near-dead
+    code in practice. They want tuning against a sample of real photos, and
+    that sample is the prerequisite for the low-confidence path being useful
+    rather than decorative.
+11. The local food database is **empty**. The mechanism, the trust badge, the
+    plausibility checks and the seed format are all in place; what is missing is
+    ~150 dishes transcribed from MyFCD / Singapore HPB into
+    `R__local_food_seed.sql`. This is the single highest-leverage accuracy work
+    left in the product and it is a data task, not an engineering one. Do not
+    fill it with recalled or generated figures - see the file header.
+12. A dish's *first* portion estimate still pins the portion every later menu
+    scan replays (`nutrition_cache.grams`). Portion corrections deliberately do
+    not write back to that shared table - see below - so a dish first resolved
+    at a bad size stays that size on menus for everyone. Fixing it properly
+    means separating "this user's plate" from "a typical restaurant serving",
+    which is the same data model per-user learning needs.
+13. Prompt injection is contained, not solved (see below). The remaining gap is
+   that nothing *detects* an attempt — a photographed note is flattened into a
+   bullet and passed to the model with no signal that it happened. A cheap next
+   step is a counter on names whose cleaned form differs materially from the
+   raw one, so the rate of attempts is at least visible.
+
+### Recently closed
+
+- **A menu scan could not be shared at all** — no control, top or bottom, and no
+  card to share. The tier list is the most shareable thing the app makes and it
+  was the one result you could not show anyone.
+
+  It could not reuse the meal card: a menu result has no score, no grade and no
+  totals. `buildMenuShareCard` draws the five tiers instead, fed from
+  `tierMeta.js` — the same source the screen renders from, so the image and the
+  screen cannot disagree about a tier. All five rows are always drawn, including
+  empty ones: an absent tier is information.
+
+  The ticket chrome is now shared (`drawTicketChrome` / `drawPhotoSquare` /
+  `drawTicketFooter` / `dashedRule`), so the two cards cannot drift into looking
+  like they came from different apps. **That refactor touched working
+  image-generation code**, so the meal card was re-rendered and checked
+  element-by-element afterwards — header, photo tile, leader rows, red grade
+  stamp, highlight note, barcode, serial all still paint.
+
+  **The trap here was fonts.** The tier labels are Chinese (夯, 顶级, 人上人…) and
+  the card's font stack is monospace — Consolas and Liberation Mono carry no CJK.
+  Canvas silently substitutes rather than dropping glyphs like the PDF exporter
+  does (outstanding item 6), but leaning on that fallback for the one thing the
+  card is *about* would be careless, so labels use a CJK-capable stack.
+  `drawLeaderRow` measures in whichever font it is about to draw with — measuring
+  in one and drawing in another puts the dot leader in the wrong place. Verified
+  by sampling the rendered PNG: all five tier colours present.
+
+  `ShareControls.jsx` now holds `useShareCard`, `ShareIconButton` and
+  `ShareButton` for both screens; `useShareCard` takes a card builder so meal and
+  menu differ only in that.
+
+  Two things worth knowing: a reopened menu scan from history shares **without**
+  a photo (the menu list is fetched by a sibling route, so no thumbnail is in
+  scope — the card falls back to its 📋 tile), and my first attempt at that
+  passed `listEntry?.thumbnail` from a scope where `listEntry` does not exist.
+
+- **Sharing a result meant scrolling past the whole report to reach it** (user
+  report, not from the review). Measured on a 375x812 screen with a four-item
+  meal: the share button sat **1,354px below** the grade, on a 1,647px page —
+  nearly two full screens away from the moment someone actually wants to show
+  a friend. A share icon now sits beside the score, in view at scroll 0.
+
+  The bottom button stays. The two are not really duplicates: the icon is for
+  acting on the grade as it lands, the button for deciding after reading the
+  report — and the button keeps the error line, which has room there and does
+  not in a 44px circle.
+
+  **They are one flow, not two.** `useShareCard` owns the state and both
+  controls render from it, so the icon cannot look idle while the button says it
+  is working. Building the card draws the result and the photo onto a canvas, so
+  the wait is long enough to see. Verified sensitive: giving the icon its own
+  `useShareCard` fails two tests.
+
+  The glyph is inline SVG rather than an emoji — an icon-only control has to
+  inherit the disabled colour and swap to a spinner, and emoji do neither. It is
+  44x44 around a 20px glyph and carries its own `aria-label`, since there is no
+  text to name it.
+
+  Note the A+ confetti burst originates at the top-right corner, which is where
+  this icon sits. It is a pointer-events-none overlay so taps still land.
+
+  **Caught by looking, not by tests:** adding the glyph to the bottom button too
+  gave it two icons — `results.share` already begins with a 📤 in all three
+  languages. The bottom button is back to exactly its old appearance.
+
+- **The five remaining accessibility gaps** from the UI/UX review's audit. (The
+  review labels its UI/UX findings U1–U3 only; these were its unnumbered
+  "remaining gaps" list.)
+  - **No skip link.** Keyboard and switch users tabbed through the header and
+    the whole account menu on every screen. One is now first in the tab order,
+    visible on focus, targeting `<main id="main" tabIndex={-1}>`.
+  - **The tab bar announced four unrelated buttons.** The review asked for
+    `role="tablist"`/`role="tab"`/`aria-selected`. **That is the wrong role
+    here and it was not applied**: `tab` promises an associated `tabpanel` it
+    shows and hides, which a screen reader then looks for; these four buttons
+    change the route and there are no panels. `jsx-a11y` rejects the
+    landmark/role pairing outright, which is what surfaced it. The real
+    complaint is fixed the correct way — the `<nav>` landmark carries a name and
+    the current destination is marked `aria-current="page"`.
+  - **Emoji read aloud as icon content** ("camera with flash emoji, Snap"). Now
+    `aria-hidden`, since the text label beside them already says it.
+  - **The barcode scanner was unusable without sight.** Aiming a package inside
+    a viewfinder you cannot see has no accessible version, so the `<video>` got
+    a name and, more importantly, a **manual digit-entry field** was added — it
+    feeds the same `setCode` the detector calls, so the lookup, the servings
+    prompt and the history write are the identical flow. Also covers a scratched
+    label or a broken camera. Validation lives in `barcodeInput.js`.
+  - **Text below the 12px floor.** Every `text-[11px]` *and* `text-[10px]` is now
+    `text-xs`. The review only named 11px, but its own stated floor condemns 10px
+    harder, and half-fixing it would have been incoherent.
+
+  **Verified in a browser, not by assertion** — a font-size bump is exactly the
+  change a passing test suite cannot vouch for. Ran the app at 375×812 with the
+  backend in mock mode, drove a real analysis through the file input, expanded a
+  `FoodCard` (the densest layout, and the one changed blind): minimum rendered
+  font 12px, zero horizontal overflow, no element overflowing its container.
+  Also confirmed live that all four tab emoji are `aria-hidden`, the current tab
+  carries `aria-current="page"`, and the skip link is first in tab order and
+  lands focus in `<main>`.
+
+  Two things that check caught. My first "is the skip link visible on focus"
+  assertion reported false — the headless window has no focus, so `:focus` never
+  applies and the measurement was meaningless; confirmed instead that Tailwind
+  emitted `.focus\:not-sr-only:focus`. And `.claude/launch.json` was added to
+  run the dev server.
+
+- **Four smaller UX defects** (U3).
+  - **Visitors were warned about losing their history only after they had
+    logged it.** `SignInBanner` lived on the History and Analysis tabs, which a
+    visitor reaches *after* the meals a refresh is about to discard. The warning
+    now appears on the results screen, at the first result.
+  - **An 8–20s analysis showed no progress and offered no way out.**
+    `AnalyzingScreen` now lists the three real legs of the pipeline — vision,
+    nutrition resolution, feedback — with per-flow wording (a barcode scan does
+    no vision work, so it does not claim to). **This is a timeline, not a
+    measurement**: the backend answers a single POST with no streaming, so
+    `analyzingPhases.js` drives it from elapsed time, and the design follows
+    from admitting that. There is no percentage, and **it never reaches
+    "done"** — the last stage holds until the response lands, however late,
+    because a bar that fills to 100% while the user is still waiting is a lie
+    they catch every time.
+  - **No cancel.** `requestSeqRef` only decided whether a *returning* response
+    still mattered; it could not stop the request, so a slow analysis kept
+    holding a server thread and the user's data plan for a result nobody was
+    waiting for. An `AbortController` now does. The subtlety: fetch rejects with
+    `AbortError` for both a cancel and a lost connection, so `api.js`
+    distinguishes them (`CANCELLED`) — otherwise pressing Cancel puts an error
+    screen in front of someone for doing what the button offered.
+  - **PDF export was buried and `FoodEquivalents` was hidden.** Export now
+    appears on a fresh result (any saved meal has an `entryId`), not only after
+    finding the meal again in history; the calories→"≈ 3 bowls of rice"
+    conversion moved from the account budget popover to beside the calorie bar,
+    where a kcal figure actually needs a referent. **Still open:** the PDF is
+    English-only and its Helvetica font cannot render Chinese — that is a font
+    problem, tracked separately as outstanding item 6, and untouched here.
+
+  Verified sensitive: letting the last stage report done, collapsing the
+  per-flow timelines, hiding the cancel button, and removing the abort
+  distinction fail 9 tests between them.
+
+- **A wrong result could only be deleted, never edited** (U2). The app presented
+  "Nasi lemak, 398 kcal" as fact, and portion estimation guarantees it sometimes
+  is not. Two controls now sit on each `FoodCard` of a saved meal:
+  - **Portion** (½× / 1× / 1½× / 2×), which landed with N1.
+  - **"This isn't in the photo"** — remove a misidentified item, new here.
+    `DELETE /api/history/{id}/foods/{index}`.
+
+  **Removal is not a small multiplier, and that is the whole reason it exists.**
+  The multiplier floor is 0.25×, and even an unbounded one would only shrink a
+  hallucinated dish toward zero while it still counted toward variety and the
+  food-group mix — a phantom vegetable keeps earning its bonus at any size. It
+  is a different claim about the photo, so it is a different operation rather
+  than a sentinel value in the multiplier list.
+
+  Same guarantees as the portion path: positional (two items can share a name),
+  no nutrition accepted from the client, re-graded by the deterministic engine
+  with no model call, scoped to the owning user. Emptying a meal is refused with
+  **409 `LAST_FOOD`** rather than 400 — the request is well-formed and the user
+  is not confused, they are saying the whole entry is wrong, and the distinct
+  code lets the client point at deletion instead. The control is hidden
+  altogether on a one-item meal rather than shown and then refused.
+
+  It lives inside the expanded card, not as a ✕ on the collapsed row: removal
+  cannot be undone, and that placement is the friction, in place of a
+  confirmation dialog that would blunt the app's only correction path.
+
+  Seven endpoint tests, verified sensitive — dropping the ownership check, the
+  bounds check, the empty-meal guard and the write-back fails five of them,
+  including the index-shift case (a removal renumbers every later food, so a
+  correction sent straight after must match the shortened list or be rejected).
+
+- **Every async surface was a centred line of grey text** (U1). On a slow
+  connection the History tab was a blank screen with "Loading…" in the middle
+  of it for seconds, and the layout jumped when content arrived. Six loading
+  branches — meal history, menu history, meal detail, menu detail, the Analysis
+  tab and the Profile achievements grid — now render placeholders shaped like
+  what is coming (`components/Skeleton.jsx`). The history skeleton holds the
+  weekly chart's space as well as the list's, since otherwise the list appears
+  and is immediately pushed down.
+
+  **The trap in this change is accessibility, and it points the wrong way from
+  how it looks.** That "Loading…" text was the only thing announcing the wait to
+  a screen reader; grey rectangles announce nothing. Replacing text with
+  decoration would have made the app *worse* for the people least able to see
+  that anything was happening. So every skeleton is a `role="status"`
+  `aria-busy` region carrying the same string in an `sr-only` element, and every
+  placeholder block is `aria-hidden`. The pulse is `motion-safe:` gated —
+  reduced-motion users get static grey, which still reads as "content goes
+  here". Row counts are fixed rather than random, so a skeleton never animates
+  its own shape while waiting.
+
+  Two test files, because they fail for different reasons: `Skeleton.test.jsx`
+  covers the components' a11y and motion contracts (verified sensitive —
+  ungating the pulse, dropping `aria-hidden`, or removing the `sr-only` label
+  fails 16 of 19), and `LoadingSurfaces.test.jsx` covers the wiring, since six
+  branches were rewritten by hand and a missed one still builds, still lints,
+  and still passes everything else. Reverting a single call site to plain text
+  fails it.
+
+- **Four grading defects** (N3). All four change existing grades; each is
+  tunable back from `scoring.*` in `application.yml`.
+  - **The backend graded against a macro split the frontend never showed.**
+    `MacroDonut` told a maintenance user "protein target 25%" while
+    `ScoringService` graded everyone against a flat 30/40/30 — two numbers
+    visible on the same screen, disagreeing. `MacroTargets` now holds the same
+    three splits the frontend displays (weight_loss 35/35/30, muscle_gain
+    30/45/25, maintenance 25/45/30) and the goal is threaded through `score()`
+    from all four call sites. **These duplicate `MACRO_TARGET_RATIO` and can
+    drift silently** — nothing crashes, the grade just stops matching the target
+    on screen — so a parity table is asserted verbatim on both sides, the same
+    treatment `CalorieBudget`/`calorieCalculator.js` already gets. Verified
+    sensitive by changing one frontend value and watching the JS side fail.
+  - **Quality was a step function.** 7.9g of fibre scored nothing and 8.0g the
+    full five points; 799mg of sodium was free and 801mg cost eight. Two
+    near-identical meals could differ by 13 points on numbers nobody measures
+    that precisely. Bonuses and penalties now ramp linearly (`ScoringService.ramp`),
+    and setting a "full at" value equal to its threshold restores the old cliff
+    exactly — which is what makes this reversible from configuration alone.
+  - **Sodium was the least defensible penalty in the engine**, resting on the
+    least reliable number in the pipeline (added salt in local cooking is
+    invisible to both a photo and a generic USDA match). Softened, and bounded:
+    the penalty now ramps from 800mg to full at **1600mg** — twice a meal's fair
+    share of the 2300mg daily guideline. 2300 was tried first and rejected as
+    too generous; it left a 1200mg meal losing only 2 of 8 points, and it moved
+    the canonical nasi-lemak-and-fried-chicken fixture from C to B. At 1600 that
+    fixture stays C, a marginally-salty meal barely moves, and a genuinely salty
+    one still loses the whole penalty. Revisit when the local food database
+    carries real sodium figures.
+  - **A coffee and a biscuit was graded as a failed meal.** The snack exemption
+    required `foods.size() == 1`, so two items totalling ~180 kcal lost portion
+    points for under-eating and were judged on 2 of 3 food groups. Now keyed
+    purely on calories. **Consequence worth knowing:** the under-eating ramp in
+    `portionPoints` is thereby unreachable from `score()` — the exemption and the
+    ramp test the same threshold, and the item count was the only thing
+    pretending they were different questions. Logging 200 kcal is a snack, and
+    nothing in the log distinguishes that from an intended small meal, so
+    exempting it is the honest reading. The branch is kept, commented, and would
+    return if the two thresholds were ever separated.
+
+  Also fixed: `MacroTargets.forGoal(null)` threw — `Map.of` rejects a null key
+  rather than missing it, and a user with no goal set is the common case, not an
+  error. Caught by the endpoint tests, not by the unit tests.
+
+  The "How grading works" rubric said "a balanced ~30/40/30 mix" in all three
+  languages; it now says the target for your goal, which is what the engine
+  actually does.
+
+- **Local dishes had a permanent accuracy ceiling** (N2) - *mechanism done, data
+  not*. USDA FoodData Central contains no nasi lemak, char kway teow, roti canai,
+  cendol or teh tarik, so each of those resolves through `usdaSearchTerm` to the
+  nearest generic ("coconut rice" for the nasi lemak base) or falls to the
+  model's own estimate. No amount of prompt work moves that: the data is not in
+  the source being queried.
+
+  **What is built and tested.** `local_food` + `local_food_alias` (V10),
+  `LocalFoodService`, and resolution order **local -> USDA -> model**. A hit is
+  reported as `source="local"` and shown as the highest trust badge, above USDA -
+  it is the dish itself rather than the closest generic, and it carries a
+  citation. Three design points worth keeping:
+  - *Aliases get their own indexed table*, not the comma-separated column the
+    review sketched. A delimited column cannot be indexed, so matching a Chinese
+    dish name against it would scan every row - for every dish of every menu
+    scan, which is up to sixty per request.
+  - *The lookup uses the dish's own name, not `usdaSearchTerm`.* That field
+    exists to translate a local dish into the nearest generic USDA has, which is
+    precisely the approximation this table replaces; searching the curated
+    database for the generic would defeat the point.
+  - *A curated row's typical serving is preserved through the cache.* An earlier
+    version of this wiring overwrote it with the scan's grams, which silently
+    threw the published serving away for menu scans - the one flow that replays
+    a pinned portion and therefore the one that wanted it. Caught by
+    `LocalFirstResolutionTest`, which fails if it regresses. The photo flow still
+    wins on portion (it saw a plate), and borrows only the *relative* width of
+    the model's bracket, since the table is certain about composition and says
+    nothing about how much is on this particular plate.
+
+  **The table ships EMPTY, and that is the honest state of it.** Rows belong in
+  `R__local_food_seed.sql` - a Flyway *repeatable* migration, so curating is a
+  data change rather than a schema change: edit the file, deploy, done. It is
+  empty because nutrition figures for a health app have to be transcribed from a
+  published composition table (MyFCD; Singapore HPB), not recalled or inferred.
+  A plausible-looking number wearing the app's highest trust badge is worse than
+  an honest model estimate, because the user cannot tell it was invented and the
+  app is telling them to trust it more. **Until rows are curated in, N2's
+  accuracy win is unrealized** - the service is a fast indexed miss and behaviour
+  is exactly what it was. Check each source's licensing before redistributing
+  rows in this repo.
+
+  **What protects the data once it lands.** `NutrientPlausibility` cross-checks
+  every row: the load-bearing one is Atwater - calories are not an independent
+  measurement, they are protein and carbs at 4 kcal/g plus fat at 9, so a stated
+  energy that disagrees with the stated macros means one of the four was copied
+  wrong. Plus bounds no real food crosses, and fibre/sugar not exceeding carbs.
+  `LocalFoodSeedTest` runs those over whatever the seed file actually contains,
+  and also requires every row to be canonicalized (an uncanonicalized name is a
+  row that silently never matches) and to carry a `source` and a `provenance`
+  citation. Those per-row assertions **pass vacuously today** - stated plainly
+  rather than hidden; they exist to fail the build the moment bad data is added.
+  The checks themselves are proven non-vacuously by `NutrientPlausibilityTest`.
+
+  New metric `local.food.lookup{outcome=hit|miss}`: the hit rate *is* the
+  coverage of the seeded data, which is the number that says whether curating
+  more dishes is still worth doing.
+
+- **A guessed portion was final** (N1). Portion is the largest error source in
+  the pipeline - one number inferred from a 2D photo with no depth, no reference
+  object and no plate calibration - and until now the only response to a meal
+  logged at double its real size was to delete it, while it sat in the day's
+  totals, the calorie budget and the achievement counts. Three of the review's
+  four sub-items are done; the fourth is unblocked.
+
+  **(1) Correction path.** `PUT /api/history/{id}/portions` takes one multiplier
+  per food and returns the meal re-graded. Three properties are deliberate:
+  - *The server never accepts nutrition from the client.* The request carries
+    multipliers and nothing else; the numbers come from the stored row. Taking
+    client-supplied foods would have been simpler and would let anyone POST a
+    fabricated A+ meal into their own history, which feeds streaks and badges.
+  - *Multipliers are absolute, not cumulative.* Each item keeps a
+    `portionMultiplier` and a correction scales by `new / old`, so tapping
+    around the buttons lands back exactly on the model's original figures
+    instead of drifting. A test drags through 0.5 -> 2.0 -> 0.25 -> 1.0 and
+    asserts the total returns to where it started.
+  - *No model call.* Re-scoring is the same deterministic Java as the original
+    grade, and the feedback comes from the rule-based path. That is what makes a
+    correction instant and free enough to be a row of buttons. The trade-off is
+    that AI-written prose is replaced by rule-based prose after a correction -
+    which is the right way round, since the words have to match the numbers.
+
+  The review proposed re-scoring **client-side**. That was not done on purpose:
+  the scoring engine is deterministic Java with ~20 tunable thresholds, and a
+  JavaScript copy would be a second implementation free to drift - the exact
+  trap `calorieCalculator.js` and `CalorieBudget.java` already sit in, which
+  needed a parity table to contain. The client tracks which multiplier is
+  showing and nothing else.
+
+  `AnalysisResponse` now carries `entryId` so the correction is offered on the
+  results screen, where the user is looking at the wrong number, rather than
+  only from history later. Visitors do not get it: there is no row to scope a
+  correction to, and the alternative - trusting client-supplied foods - is the
+  one thing this design refuses.
+
+  **(2) Show the range** - done with AI3(c); the calorie band is on the results
+  screen and on each food card.
+
+  **(3) Reference-object calibration.** The vision prompt now lists real-world
+  references (26cm dinner plate, 12cm rice bowl, 330ml can, adult palm ~ 100g of
+  meat), asks the model to name the one it used, and to widen the bracket when
+  the frame gives it no scale. **Measured against the live API**: a described
+  scene with a visible plate rim produced a mean bracket 55% as wide as the
+  estimate; the same dish cropped with no reference produced 108% - roughly
+  double, with `estimatedPortion` reading "no scale ref visible, wide range".
+  Caveat: those were *described* scenes, not photographs, so this shows the
+  instruction is followed, not that calibration from real images is accurate.
+  `UntrustedText.MAX_PORTION` went 60 -> 90 to fit the calibration note without
+  chopping it mid-word on the card.
+
+  **(4) Per-user learning** is still not built, but is no longer blocked - it
+  needed corrections to exist. It also needs a correction log, which does not:
+  corrections overwrite the row rather than being recorded, so there is nothing
+  to learn a personal multiplier from yet. Adding that log is the first step,
+  and it is deliberately not speculatively stored today.
+
+  **What a correction pointedly does not touch:** `nutrition_cache`. That table
+  is shared by every user and is what menu scans replay as a typical restaurant
+  serving. One person correcting their own plate is not evidence about that, and
+  writing it back would let any user move every other user's menu numbers. The
+  consequence the review flagged - a bad first estimate pinning a dish's menu
+  portion - therefore still stands, and is now item 11 below.
+
+  Fixed in passing: `@Valid` failures on a request body in `AnalysisController`
+  fell through to the catch-all `@ExceptionHandler(Exception.class)` and were
+  reported to the client as **500s**. Same shape as the multipart bug fixed
+  earlier in that file. `BarcodeController` is unaffected - it validates by hand
+  in the controller rather than through Bean Validation.
+
+- **The AI layer emitted one log line and nothing else** (AI4). It was not
+  possible to answer any of: what fraction of analyses fall back to a model
+  estimate instead of USDA, what the vision p95 is, how often a response arrives
+  truncated, how many 429s a day, how often the bulkhead sheds a caller. Actuator
+  plus Micrometer now publish `/actuator/prometheus`, with meter names and tag
+  keys centralised in `AppMetrics` (a typo in a metric name is invisible — no
+  compiler error, no failing test, just a series that stops existing).
+
+  What is instrumented, and why these cuts:
+  - `gemini.call{model,type,outcome}` **and** `gemini.chain{type,outcome}` are
+    separate on purpose. One slow chain is often twelve fast failed calls, so a
+    p95 over individual calls stays healthy straight through an incident where
+    every request took four attempts. The chain is what the request thread waits
+    for and what an alert should fire on.
+  - `type` splits vision / menu / feedback. A menu costs roughly double a meal
+    and feedback is a different model on a different budget; one combined
+    "gemini latency" series averages all three into a number describing none.
+  - `outcome` separates `rate_limited`, `server_error`, `timeout`, `truncated`,
+    `busy`, `budget_exhausted` and `shed`. All of these reach the user as the
+    same 503 and each calls for a different response — rotate keys, wait, raise
+    the token budget, or add capacity. `budget_exhausted` needed a
+    `BudgetExhaustedException` subclass to be distinguishable from plain `busy`.
+  - `usda.lookup{outcome}` separates `miss` from `client_error`. Both end as
+    "estimated" nutrition, but a genuine miss is expected for an unusual local
+    dish while a 4xx means the key or query shape is wrong and *every* food is
+    silently downgraded — without the tag those look identical.
+  - `nutrition.source{source}` is the review's first question as a ratio.
+    `nutrition.cache{result}` keeps `memo_hit` and `store_hit` apart, because a
+    warm process still reading the table every time is the case worth seeing.
+  - `analysis.duration{outcome}` counts "no food in the photo" as `no_food`, not
+    `error` — otherwise there is a permanent floor under the error rate.
+  - `gemini.slots.available` is a gauge, so bulkhead pressure is visible
+    *before* anything is shed.
+
+  **Every tag value comes from a closed set** — configured model names and fixed
+  outcome words. Nothing is tagged with a dish name, user id or API key: each
+  combination is a time series held for the life of the process, so an unbounded
+  tag is a slow memory leak that also makes the dashboards unreadable. Which key
+  hit a 429 stays in the logs, where it is already masked. A test pins this by
+  making 25 identical calls and asserting one series.
+
+  **Access.** Only `health` and `prometheus` are exposed, and SecurityConfig
+  denies everything else under `/actuator` outright — so widening
+  `management.endpoints.web.exposure.include`, which is what someone actually
+  does while debugging, cannot on its own put `env`, `beans` or `heapdump` on the
+  network. Both places have to change. `ActuatorExposureTest` sets exposure to
+  `*` and asserts they are still refused; removing the `denyAll` line makes
+  `/actuator/env` answer 200, which is how that test was checked. On top of that,
+  the backend port is not published to the host and nginx now returns 404 for
+  `/actuator` explicitly rather than by omission. Health is `show-details: never`
+  because it is permitAll and details name the failing component and its
+  exception.
+
+  **Not done:** nothing scrapes this yet. The endpoint is the prerequisite; a
+  Prometheus/Grafana/Alertmanager stack (or a hosted tier) is still outstanding,
+  and until one exists these metrics are only readable by hand from inside the
+  compose network. The alerts worth having first: backend health down, 5xx rate
+  over 1%, `analysis.duration` p95 over 30s, any sustained
+  `gemini.chain{outcome=shed}`, and disk over 80%.
+
+- **Vision output was schema-less, portion-blind and cooking-method-blind**
+  (AI3). Five changes, four of them verified against the live API rather than
+  assumed:
+  - **(a) `responseSchema`.** Both vision calls and the feedback call now send a
+    schema, so JSON conformance is enforced by the decoder instead of requested
+    in prose. The two closed vocabularies (`foodGroup`, `cookingMethod`) go with
+    it — `foodGroup` was previously unvalidated, and since the variety score
+    counts *distinct group strings*, a model answering "noodles", "rice" and
+    "carbohydrate" for three starches scored full variety. `FoodTaxonomy`
+    re-checks on ingest, because a schema does not cover the barcode path or
+    rows written before it existed; anything off-vocabulary becomes null, which
+    both the variety count and the vegetable bonus skip.
+  - **A truncation bug found while verifying (a).** The models behind
+    `gemini-flash-latest` are thinking models and **thinking tokens are charged
+    against `maxOutputTokens`** — measured: a 2048 budget came back 1620 spent
+    thinking, 412 on the answer, `finishReason: MAX_TOKENS`, JSON cut mid-array.
+    At the old menu budget of 8192, 60 dishes × 16 fields (~7200 tokens) plus
+    thinking overflowed outright, so a full menu could truncate *every time*,
+    and `extractJson` would either 500 or — worse — bracket-match its way to a
+    shorter valid array and silently drop dishes. Budgets are now 8192 (meal),
+    16384 (menu), 2048 (feedback), and `TruncatedResponseException` abandons a
+    truncated model for the next one instead of parsing a prefix.
+  - **No thinking config is sent, deliberately.** There is no setting that works
+    across the fallback chain: `thinkingConfig.thinkingLevel` is rejected by 2.5
+    models, `thinkingBudget: 0` is rejected by 3.x ones. Either would return a
+    400, which `callWithinBudget` treats as fatal rather than falling through —
+    so a config change on Google's side would take the feature down. A generous
+    budget plus truncation handling gets there without model sniffing.
+  - **(b) Portion anchors** in the vision system prompt (a nasi lemak bungkus is
+    ~230g of rice, a roti canai ~90g, a satay stick ~15g, …). Verified live: the
+    model returns exactly those figures.
+  - **(c) `gramsLow`/`gramsHigh`,** which become the meal's calorie band. What is
+    pinned in the nutrition cache is the bracket's *shape*, not its size: a menu
+    replays the pinned bracket outright, a photo supplies its own grams and takes
+    the pinned ratio around them. Taking the raw per-scan bracket instead let the
+    displayed range move between two photos of an identical portion —
+    `NutritionDeterminismTest` caught that, and it is the same variance the cache
+    exists to remove, just relocated into the range.
+  - **(d) `cookingMethod`** replaces the `fried` boolean, which forced char kway
+    teow and deep-fried chicken wings to be the same answer. **This changes
+    existing grades:** stir-fried now costs `scoring.stir-fried-penalty-points`
+    (4) against deep-fried's 8. Set them equal to restore flat behaviour. Items
+    with no method — barcode scans, pre-vocabulary rows — fall back to the
+    boolean and keep the full penalty.
+  - **(e) The output language moved to the system instruction.** It used to be
+    appended to the user turn immediately below the fenced untrusted block, which
+    is the one position best placed for a payload to contradict it.
+
+- **Confidence was displayed but never acted on** (AI2). The review claimed
+  nothing read it; that was wrong — `FoodCard` has always shown a coloured dot
+  and a percentage. What was missing is that the number changed nothing: a 55%
+  guess and a 95% identification got the same layout, the same weight, and the
+  same air of authority around the calorie total. Now, via a single
+  `confidence.js` so the three surfaces cannot disagree:
+  - below 0.6 the item card says "not sure" in words next to the percentage;
+  - below 0.45 the meal gets a banner naming the specific items;
+  - the score renders as `78 ± 4` when mean confidence is low, with the spread
+    widening as confidence falls and suppressed below ±2 (a ±1 on a 100-point
+    scale is noise dressed as precision).
+
+  **Nothing here changes a score, total or grade** — those stay deterministic
+  server-side arithmetic. Low confidence widens what the app *claims*, never
+  what it computed; marking uncertain meals down would be lying in a new
+  direction.
+
+  Two honest caveats. The review's "tap to correct" affordance is **not** built:
+  there is no correction UX to tap through to (item 3 above), and a control that
+  opens nothing is worse than none, so the banner offers the action that does
+  exist — retake the photo. And model confidence is poorly calibrated: in live
+  checks it clusters at 0.95 almost regardless of difficulty, so these
+  thresholds will need tuning against real photos before the low-confidence path
+  fires as often as it should.
+
+- **Photographed text reached the feedback prompt as instructions** (AI1). The
+  vision model reads text visible in the photo, so anything held up to a camera
+  could come back as a dish `name`, and `FeedbackService.buildContext`
+  concatenated those names straight into the second prompt. Closed in four
+  layers, none of which is a phrase blocklist — those are reworded in seconds
+  and mostly buy false confidence:
+  1. **`UntrustedText`**, applied in the compact constructors of
+     `IdentifiedFood`, `FoodItem` and `FeedbackResult` rather than at call
+     sites, so no path — a new provider, a new endpoint, Jackson rebuilding a
+     stored row — can reach the app carrying uncleaned text. It denies an
+     injection the *shape* it needs: no line breaks (the prompt is one bullet
+     per food, so a payload stays trapped mid-sentence), no angle brackets (it
+     cannot close the data fence, and chat-template markers fall to the same
+     rule), no invisible characters (bidi overrides, zero-width joiners, the
+     Unicode tag block), and a hard length cap.
+  2. **A fenced `<meal_data>` block** in the feedback prompt holding only
+     model-derived text. Totals, score and goal stay outside it — they are
+     computed in Java and labelling them untrusted would invite the model to
+     second-guess them.
+  3. **A system instruction on the feedback call**, which previously had none
+     at all: its role lived inline in the user turn, one line above the
+     interpolated names, at the same level of authority as a payload. Both
+     vision prompts also now state that text in the photo is scenery to
+     describe, never instruction — the menu prompt carefully, since reading
+     printed text is its actual job.
+  4. **Bounded output.** `FeedbackResult` caps each list at 3 and each string
+     at 300 chars. The rule-based path always did; the AI path did not, so a
+     steered model could return fifty "suggestions" and the UI rendered them.
+
+  What this does *not* claim: a model can still be talked into odd prose inside
+  one bullet. That is why the architecture matters more than any of the above —
+  the grade is Java arithmetic over resolved nutrition facts, so no injected
+  text moves a score, and there are no tools to call. `PromptInjectionTest` and
+  `UntrustedTextTest` (17 tests) pin the containment properties; both were
+  verified to fail when the scrubbing or the system instruction is removed.
+
+- **No routing; the Android back button exited the app** (F1). The four tabs and
+  both history detail views are now real routes, so back, refresh, and deep
+  links all work. The tab is derived from the URL rather than held in state,
+  which is the whole mechanism. `phase` (analyzing/results/error/barcode) stays
+  component state on purpose — those are transient states of one capture, not
+  places you can link someone to. The meals/menus toggle lives in `?view=` so
+  returning from a menu detail doesn't silently reset to Meals. nginx's
+  `try_files ... /index.html` and the service worker's `navigateFallback`
+  already supported deep links, so no server change was needed.
+
+- **History fetched separately by two screens, and again on every tab switch**
+  (F2). `HistoryProvider` holds one copy for the session; the History and
+  Analysis tabs read it instead of each issuing their own request. Invalidation
+  is a `version` counter bumped after a persisted analysis — declarative,
+  because the shell renders the provider and so cannot consume it.
+
+- **Weekly stats were computed from a truncated list** (F3). The chart and the
+  Analysis tab derived their totals from `/api/history`, which stops at fifty
+  rows — a user logging eight meals a day exhausts that in six days, so "total
+  this week" and "average daily" were quietly short with nothing on screen to
+  say so. New `GET /api/history/recent?days=7` returns the window *complete*,
+  as `{id, createdAt, calories}` only, which is what makes dropping the cap
+  affordable. The fifty-row cap stays on the list, where it is a sensible page
+  size rather than an arithmetic error.
+
+- **No linting and no frontend tests** (F4). ESLint (react, react-hooks,
+  jsx-a11y) and Vitest, both now in CI along with a `permissions: contents:
+  read` block. Lint found a real stale-closure on its first run — the missing
+  `visitorHistory.length` dependency in App.jsx's first-run gate, exactly the
+  class of bug it was added for. The highest-value test is the
+  **calorie-budget parity table**: `calorieCalculator.js` and
+  `CalorieBudget.java` implement the same formula twice and both carried a
+  "keep in sync" comment with nothing enforcing it, so they could drift and the
+  only symptom would be the number changing when the user pressed Save. The
+  same five cases now exist in both test suites; change one only alongside the
+  other.
+
+- **`FoodKeywords` matched substrings** (B6). "steak" contains "tea" and
+  "chocolate" contains "cola", so either logged on its own was recorded as a
+  drinks-only meal — and since that verdict is written into
+  `beverage_only`/`coffee_only` when the meal is saved, the wrong badge stayed
+  unlocked permanently. Matching is now whole-word, with an optional plural
+  suffix so "cookies" and "burgers" still match, and compounds that genuinely
+  are the thing ("cheesecake") spelled out in the lists. That last part matters:
+  whole-word matching is strictly *narrower*, so the risk now runs toward false
+  negatives, and cheesecake only ever counted as cake because "cake" happened to
+  be a substring. **V8 is a Java migration that repairs the rows already
+  written** — it re-derives the flags from `result_json` for rows currently
+  flagged true, reusing `FoodKeywords` rather than restating the lists so the
+  repair can't drift from the rule. Only true → false is possible, since the new
+  matching is a subset of the old.
+
+- **`UsdaClient`'s `dataType` filter — reviewed, verified, and left alone**
+  (B7). The engineering review flagged the three repeated `dataType` parameters
+  as probably ignored by FoodData Central, which would have meant every dish
+  matching against branded products. **That was wrong**, confirmed against the
+  live API: repeated parameters return 841 curated hits for "chocolate milk"
+  (Survey/SR Legacy only), while dropping the filter returns 150k results that
+  are entirely Branded. The documented comma-separated form also works, but only
+  with percent-encoded spaces — comma-joined with `+` for spaces is a **400**,
+  which this client swallows into an empty result and silently downgrades every
+  food to a model estimate. So the "fix" would have broken nutrition lookups
+  invisibly. The code is unchanged; `UsdaClientTest` now pins the emitted query
+  shape so nobody repeats the misreading, and the client's retry semantics were
+  corrected separately (no retry on 4xx, brief backoff otherwise).
+
+- **Barcode logging was a GET that wrote to history** (`/api/barcode/{code}`).
+  SameSite=Lax deliberately sends the session cookie on top-level navigations
+  and CSRF tokens are disabled on the strength of that cookie, so any page could
+  redirect a signed-in visitor at that URL and silently log meals — as could a
+  link prefetcher or a chat-app unfurler, with no one intending it. Now
+  `POST /api/barcode/lookup` with a JSON body, which a navigation cannot
+  produce. `GET /api/barcode/{code}/product` stays a GET; it is genuinely
+  side-effect-free. The code is also now format-checked (8–14 digits) so junk
+  costs a 400 rather than an outbound Open Food Facts call on an endpoint that
+  needs no account. `BarcodeAccessTest` pins both matchers — too narrow and the
+  scanner 401s for the visitors it exists for, too broad and the next route
+  under that prefix is exposed by accident.
+
+- **Containers had no limits, health checks, log rotation or `.dockerignore`.**
+  Both services now declare memory and CPU limits, and the backend gets
+  `-XX:MaxRAMPercentage=60` — without it the JVM sizes its heap from the
+  *host's* RAM, so the new cap would have been enforced by the kernel killing
+  the process rather than by the JVM collecting. `-XX:+ExitOnOutOfMemoryError`
+  plus `restart: unless-stopped` replaces a wedged JVM instead of letting it
+  limp. Both services rotate logs at 10 MB x 3: the default json-file driver is
+  unbounded, and on a single VM with no monitoring a disk filled by container
+  logs is the most likely way this app goes down — and the least obvious.
+  Health checks let the frontend wait for `service_healthy` rather than merely
+  "started", so nginx can't proxy into a backend still running Flyway. The
+  backend probe asks `/api/history` for a 401, which proves the servlet
+  container, Spring Security and the session store are all up; a 200 on a
+  static route would not.
+
+- **Achievements read the whole history including both CLOBs** (B4). The
+  catalog is recomputed from every meal on each `/api/achievements` call, and
+  `meal_analysis` carries `thumbnail` (~6 KB base64) and `result_json` (~3 KB)
+  per row — roughly 9 MB moved per Profile tab open at a thousand meals, to
+  read a handful of ints and booleans. It now reads a projection of the seven
+  columns it needs, with a **second** query fetching `result_json` only for
+  pre-V2 rows that have no denormalized columns to read instead.
+  `AchievementsQueryShapeTest` asserts on the SQL Hibernate emits, not on the
+  badges — the badges are identical either way, so a behavioural test would
+  pass with the projection reverted. Residual: the legacy query is issued
+  unconditionally and `vegetable_count` isn't indexed, so it scans the user's
+  rows to match (usually) none; it transfers no CLOBs, which was the actual
+  cost, but a backfill would let that query be deleted entirely.
+
+- **The other three hot reads had the same problem** (DB4). B4 fixed
+  achievements and left the history list, the menu history list and the
+  dashboard reading whole entities — both CLOBs included — for a handful of
+  columns. All three are now constructor-expression projections:
+  - **History list**: keeps `thumbnail` (the list renders it), drops
+    `result_json`. ~150 KB read and discarded per History tab open at the
+    fifty-row cap.
+  - **Menu history list**: same trade, same reason.
+  - **Dashboard**: drops both. This is the hottest read in the app — every
+    dashboard load *and* every analysis, since goal-aware feedback needs the
+    day's remaining budget — and it sums three numbers.
+
+  `findTop50By…` became `findHistoryEntries(userId, Pageable)`: JPQL has no
+  LIMIT, so the cap moved to `AnalysisService.HISTORY_PAGE_SIZE`.
+
+  **The review's proposed remedy was rejected**, and not on effort grounds: a
+  `meal_analysis_blob` table behind a lazy `@OneToOne` would likely have bought
+  nothing, because a lazy one-to-one on the *owning* side is not reliably lazy —
+  Hibernate must know whether the row exists, so it issues the query anyway
+  unless the association is `optional=false` and mapped from the other side.
+  Not selecting the columns needs no migration and cannot silently fail to work.
+
+  The pre-V2 protein fallback survives but changed shape: it now fetches
+  `result_json` **by id**, for the rows that actually lack the denormalized
+  column, so it does not run at all in the normal case — deliberately not
+  copying the unconditional legacy query the achievements path still pays for.
+
+  `HotReadQueryShapeTest` asserts on the emitted SQL for all four paths.
+  Verified sensitive: reverting all three projections to entity reads fails all
+  five of its tests, each naming its own regression. Note the results are
+  byte-identical either way, so nothing behavioural can catch this.
+
+- **Menu dishes resolved one at a time** (B5). Each dish is an independent
+  nutrition lookup, so a menu's latency was the *sum* of up to 60 round trips
+  rather than the longest — enough on a cold menu to outlast the gateway on
+  serial I/O alone. They now resolve over a bounded pool
+  (`app.menu-resolve-parallelism`, default 8), collected in submission order so
+  the tier list still follows the order dishes were read off the menu. USDA
+  also got its own much shorter read timeout (`app.usda-read-timeout-ms`, 5s
+  — it had been sharing Gemini's 30s, sized for a model writing prose), one
+  retry instead of two, and no retry at all on a 4xx, which will fail the same
+  way every time.
+
+- **No way to export or delete an account.** `GET /api/account/export` returns
+  the full record as a downloadable JSON file (stored analyses embedded as real
+  nested JSON, not escaped strings), and `DELETE /api/account` erases the
+  account and every table keyed to it. Both are surfaced in the app under
+  Profile → Your data, with a typed confirmation for deletion, and documented
+  in `privacy.html` — Play's policy requires a self-service route *and* a
+  publicly reachable page describing it.
+
+  Two things worth knowing before changing this code. Deletion revokes every
+  Spring Session for the principal **before** touching any rows: another
+  device's live session would otherwise keep authenticating during the delete,
+  and `UserService.currentUserOrNull()` recreates a missing user row from the
+  session's own OAuth attributes — so a request landing in that gap silently
+  resurrects the account. And `nutrition_cache` is deliberately left standing:
+  it is keyed by dish name, shared by all users, and holds nothing about
+  anyone. `AccountDataServiceTest` pins the first; `AccountDataEndpointTest`
+  pins the second against the real schema.
+
+  Because no `user_id` column carries a foreign key, deletion has to name every
+  table explicitly — **a table added later and not added to
+  `AccountDataService.deleteAccount` will silently outlive the accounts it
+  belongs to**, with nothing to catch it.
+
+- **`water_entry` duplicate rows** (V6). Concurrent first-taps of a day both
+  saw "no row yet" and both inserted; `findByUserIdAndDate` then matched two
+  rows for an `Optional` and every water endpoint returned 500 for the rest of
+  that day. V6 dedupes existing rows and adds `UNIQUE(user_id, date)`;
+  `WaterService.adjust` now applies its delta with an atomic SQL `UPDATE` and
+  replays onto the winner's row if it loses the insert race.
+  `WaterEntryDedupeMigrationTest` drives the real V6 against planted duplicates.
+
+  **Re-tested against a real database.** `WaterServiceTest` covers the recovery
+  path with a fake repository that enforces the constraint in Java and throws
+  `DataIntegrityViolationException` because the test says so — which proves the
+  service reacts correctly to that exception and nothing about whether the real
+  stack raises it. If Hibernate or Spring ever surfaced the breach as some other
+  type (an upgrade is enough), the catch clause would miss, `WaterController`
+  has no exception handler, and a double-tapped first drink would 500 again —
+  the exact bug. A fake cannot fail that way. `WaterRaceIntegrationTest` pins
+  the translated exception type against the real stack, stages the lost insert
+  race through a proxy that fakes only the *interleaving*, and runs 8 threads ×
+  500 taps concurrently.
+
+  That last one needed the amplification to mean anything: **one tap per thread
+  passed even with `adjustTotal` swapped back for the pre-fix
+  read-modify-write** — the window is too narrow to straddle reliably. At 4000
+  taps the same probe loses 2990 of them (75%), and the tap size drops to 1ml so
+  the 8000ml ceiling cannot clamp the shortfall out of sight. Both probes were
+  run and reverted; breaking the catch clause fails the staged race *and* the
+  concurrent one, so a genuine unstaged first-tap race does occur there.
+- **Unbounded Gemini retries.** `callWithRetry` now runs under a total
+  wall-clock budget (`app.gemini-budget-ms`, and a smaller
+  `app.gemini-feedback-budget-ms` since feedback has a rule-based fallback).
+  The schedule previously multiplied out to ~18 minutes of a held request
+  thread against a hung provider — long past nginx's 120s `proxy_read_timeout`
+  — which exhausted Tomcat's pool and took every other endpoint down with it.
+- **Unbounded Gemini concurrency.** A semaphore
+  (`app.gemini-max-concurrent-calls`, default 16) now caps how many calls are
+  in flight at once; callers past it are shed as `ANALYZER_BUSY` after a ~1s
+  wait rather than queueing. The budget alone only bounds how *long* one
+  request holds a thread — a large enough burst still drained the pool.
+- **Unmetered `/api/menu/rank`.** It is `permitAll` and the most expensive
+  request in the app (a vision call at double `/api/analyze`'s output-token
+  budget, plus a nutrition lookup per dish), and it had no `limit_req` — the
+  generic `location /api/` block it fell through to has none. Now 5r/m per IP,
+  burst 2, via an exact-match location so `/api/menu/history` stays unmetered.
+- **Decompression bombs in `ThumbnailService`.** It called `ImageIO.read` on
+  raw upload bytes, which sizes its raster from the image header — a ~1 KB PNG
+  declaring 30000x30000 passes the 10 MB multipart limit and then asks for
+  ~3.6 GB of heap. It now decodes through `ImageReader` with subsampling (so
+  the full-size raster is never allocated, whatever the header claims) and
+  refuses anything over 50M pixels from the header alone (so a gigapixel input
+  isn't streamed through the decoder just to be rejected). Those guard
+  different resources — memory and CPU respectively — and neither replaces the
+  other. Note this only protects the thumbnail step: the upload is still
+  base64-encoded and sent to Gemini first, so a hostile image costs an API call
+  before anything inspects it.
+- **Full table scans on every per-user read** (V7). Nothing outside the
+  primary keys and two unique constraints was indexed, so the History tab, the
+  dashboard, the achievements catalog and the weight trend each scanned their
+  whole table — dragging `meal_analysis`/`menu_scan`'s two CLOB columns
+  through the buffer along the way. V7 adds `(user_id, created_at)` on
+  `meal_analysis` and `menu_scan` and `(user_id, logged_at)` on
+  `weight_entry`; `water_entry` needs none, since V6's unique constraint
+  already indexes its only query shape. `QueryIndexTest` asserts against H2's
+  own planner that each index is actually chosen for the query the repository
+  issues — a composite index whose column order doesn't match is ignored
+  silently, with nothing but a slow query to show for it.
+
+  **Re-audited after the fact, and the audit is now enforced.** V7's indexes
+  turned out to still cover every query path, including the nine repository
+  methods added after it (the weekly trend, both achievement projections, the
+  account export's two listings, the four bulk deletes, and V10's alias join) —
+  each was checked against a real planner rather than assumed. But
+  `QueryIndexTest` had gone on asserting only the six shapes that existed when
+  it was written, so that coverage was luck rather than design: an unindexed
+  query is a full table scan whose only symptom is latency nobody is measuring.
+  `everyRepositoryQueryHasAPlanAssertion` now reflects over all eight
+  repositories and fails the build when one gains or loses a query method,
+  naming it, so the next query cannot be added without someone deciding which
+  index serves it. Same parity-table treatment as `MacroTargets` and
+  `CalorieBudget`, for the same reason. Verified sensitive both ways: adding a
+  probe method fails the roster, and deleting `idx_meal_analysis_user_created`
+  fails six plan assertions while correctly leaving the primary-key one passing.
 
 ## 12. Future roadmap
 

@@ -27,7 +27,7 @@ export default function SignInScreen({ onSkip }) {
       <button
         type="button"
         onClick={onSkip}
-        className="text-[11px] font-normal text-slate-600 hover:text-slate-500 hover:underline dark:text-slate-300 dark:hover:text-slate-500"
+        className="text-xs font-normal text-slate-600 hover:text-slate-500 hover:underline dark:text-slate-300 dark:hover:text-slate-500"
       >
         {t('signIn.skip')}
       </button>

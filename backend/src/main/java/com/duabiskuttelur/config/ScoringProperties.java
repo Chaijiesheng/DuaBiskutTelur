@@ -29,9 +29,44 @@ public class ScoringProperties {
     private int vegetableBonusPoints = 5;
     private double sugarPenaltyThresholdGrams = 25.0;
     private int sugarPenaltyPoints = 8;
+    /**
+     * Where the sugar penalty reaches its full value. Between the threshold and
+     * here it ramps linearly instead of snapping on, so 24g and 26g no longer
+     * differ by the whole penalty.
+     */
+    private double sugarPenaltyFullAtGrams = 50.0;
     private double sodiumPenaltyThresholdMg = 800.0;
     private int sodiumPenaltyPoints = 8;
+    /**
+     * Full sodium penalty at 1600mg - twice a meal's fair share of the 2300mg
+     * daily guideline, i.e. one meal delivering roughly two thirds of the day.
+     *
+     * <p>This is a deliberate softening, and a bounded one. 800mg in a single
+     * meal is a reasonable point to *start* being concerned; it was the point at
+     * which the entire 8-point penalty landed. That is harsh for Malaysian food
+     * and it rested on the least reliable number in the whole pipeline - added
+     * salt in local cooking is invisible to both a photo and a generic USDA
+     * match. Ramping to full at 1600 keeps a real signal (a genuinely salty meal
+     * still loses most of the penalty) while stopping the least trustworthy
+     * input from dominating the grade. 2300 was considered and rejected as too
+     * generous: it would leave a 1200mg meal losing only 2 of 8 points. Revisit
+     * once the local food database carries real sodium figures.
+     */
+    private double sodiumPenaltyFullAtMg = 1600.0;
     private int friedPenaltyPoints = 8;
+
+    /**
+     * Penalty for a stir-fried dish, applied instead of the full
+     * {@link #friedPenaltyPoints} when the model reports "stir-fried".
+     *
+     * <p>The vision model used to answer a single "fried" boolean, which forced
+     * it to call char kway teow and deep-fried chicken wings the same thing.
+     * With a cooking-method vocabulary it no longer has to, and grading them
+     * identically is a real inaccuracy: a wok dish carries meaningfully less oil
+     * than something submerged in it. Set this equal to friedPenaltyPoints to
+     * restore the old flat behaviour.
+     */
+    private int stirFriedPenaltyPoints = 4;
 
     // Portion sanity
     private double dailyCalorieBudget = 2000.0;
@@ -75,12 +110,18 @@ public class ScoringProperties {
     public void setSugarPenaltyThresholdGrams(double v) { this.sugarPenaltyThresholdGrams = v; }
     public int getSugarPenaltyPoints() { return sugarPenaltyPoints; }
     public void setSugarPenaltyPoints(int v) { this.sugarPenaltyPoints = v; }
+    public double getSugarPenaltyFullAtGrams() { return sugarPenaltyFullAtGrams; }
+    public void setSugarPenaltyFullAtGrams(double v) { this.sugarPenaltyFullAtGrams = v; }
+    public double getSodiumPenaltyFullAtMg() { return sodiumPenaltyFullAtMg; }
+    public void setSodiumPenaltyFullAtMg(double v) { this.sodiumPenaltyFullAtMg = v; }
     public double getSodiumPenaltyThresholdMg() { return sodiumPenaltyThresholdMg; }
     public void setSodiumPenaltyThresholdMg(double v) { this.sodiumPenaltyThresholdMg = v; }
     public int getSodiumPenaltyPoints() { return sodiumPenaltyPoints; }
     public void setSodiumPenaltyPoints(int v) { this.sodiumPenaltyPoints = v; }
     public int getFriedPenaltyPoints() { return friedPenaltyPoints; }
     public void setFriedPenaltyPoints(int v) { this.friedPenaltyPoints = v; }
+    public int getStirFriedPenaltyPoints() { return stirFriedPenaltyPoints; }
+    public void setStirFriedPenaltyPoints(int v) { this.stirFriedPenaltyPoints = v; }
     public double getDailyCalorieBudget() { return dailyCalorieBudget; }
     public void setDailyCalorieBudget(double v) { this.dailyCalorieBudget = v; }
     public double getMaxMealBudgetRatio() { return maxMealBudgetRatio; }

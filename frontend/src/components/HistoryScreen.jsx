@@ -1,23 +1,45 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
-  deleteHistoryEntry, exportHistoryPdf, fetchHistory, fetchHistoryDetail,
+  deleteHistoryEntry, exportHistoryPdf, fetchHistoryDetail,
   deleteMenuHistoryEntry, fetchMenuHistory, fetchMenuHistoryDetail,
 } from '../api.js'
+import { useHistory } from '../history/HistoryContext.jsx'
 import { GRADE_COLORS } from './GradeReveal.jsx'
 import ResultsScreen from './ResultsScreen.jsx'
 import MenuResultsScreen from './MenuResultsScreen.jsx'
+import { ShareGlyph, useShareCard } from './ShareControls.jsx'
+import { buildShareCard } from '../shareCard.js'
 import HistoryEmptyModal from './HistoryEmptyModal.jsx'
 import Dialog from './Dialog.jsx'
 import SignInBanner from './SignInBanner.jsx'
 import WeeklyCaloriesChart from './WeeklyCaloriesChart.jsx'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import { useTheme } from '../theme/ThemeContext.jsx'
+import { HistoryListSkeleton, MenuListSkeleton, DetailSkeleton } from './Skeleton.jsx'
 
 const LOCALE_TAG = { en: 'en-US', zh: 'zh-CN', ms: 'ms-MY' }
 
 export default function HistoryScreen(props) {
+  return (
+    <Routes>
+      <Route index element={<HistoryList {...props} />} />
+      {/* Detail views are real destinations: opening a meal and pressing back
+          is the most common back press in the app, and it used to exit it. */}
+      <Route path="meal/:id" element={<MealDetail {...props} />} />
+      <Route path="menu/:id" element={<MenuDetail />} />
+    </Routes>
+  )
+}
+
+function HistoryList(props) {
   const { t } = useLanguage()
-  const [mode, setMode] = useState('meals') // 'meals' | 'menus'
+  // In the URL so returning from a menu detail lands back on the Menus tab
+  // rather than silently resetting to Meals.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const mode = searchParams.get('view') === 'menus' ? 'menus' : 'meals'
+  const setMode = (next) =>
+    setSearchParams(next === 'menus' ? { view: 'menus' } : {}, { replace: true })
 
   const tabClass = (active) =>
     `rounded-lg py-2 text-sm font-semibold transition ${
@@ -41,50 +63,71 @@ export default function HistoryScreen(props) {
   )
 }
 
-function MealsHistory({ onAuthExpired, isVisitor, visitorEntries, onDeleteVisitorEntry, dailyBudget, goal }) {
+function MealsHistory({ isVisitor, onDeleteVisitorEntry, dailyBudget }) {
   const { t, lang } = useLanguage()
   const { theme } = useTheme()
+  const navigate = useNavigate()
   const gradeColors = GRADE_COLORS[theme]
-  // Visitors don't have server history — show their in-session results instead.
-  const [fetched, setFetched] = useState(null)
-  const [error, setError] = useState(false)
-  const [selectedId, setSelectedId] = useState(null)
-  const [detail, setDetail] = useState(null)
-  const [detailError, setDetailError] = useState(false)
+  // One shared, cached copy — this screen and the Analysis tab used to fetch it
+  // separately and again on every tab switch.
+  const { entries, recent, loading, error, removeEntry } = useHistory()
   // Pop-out shown first when there's nothing to display; clicking its CTA
   // reveals the plain empty-history view underneath. Re-rolled each time the
   // tab is opened (component remounts on tab switch).
   const [emptyPromptClosed, setEmptyPromptClosed] = useState(false)
-  // Per-row "⋮" opens the delete confirmation directly.
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(false)
+  // The entry whose "⋮" sheet is open, or null. Holding the whole entry rather
+  // than an id keeps the visitor share path (which needs entry.result) from
+  // having to look it up again.
+  const [actionsFor, setActionsFor] = useState(null)
+  const [pdfState, setPdfState] = useState('idle') // idle | working | error
 
+  /**
+   * Share a row without opening it first.
+   *
+   * The list only holds a HistoryEntry — score, grade, calories, a thumbnail —
+   * and the card needs the full analysis, so this fetches it. Visitors already
+   * have theirs in memory and have no session to fetch with, the same split
+   * MealDetail makes.
+   */
+  const buildCard = useCallback(async () => {
+    const entry = actionsFor
+    const result = isVisitor ? entry.result : await fetchHistoryDetail(entry.id)
+    return buildShareCard({
+      result,
+      // Null for visitors; buildShareCard falls back to its own tile.
+      imageSource: entry.thumbnail,
+      brandTitle: `${t('app.title1')}${t('app.title2')}`,
+      shareText: t('results.shareText', result.grade),
+      barcodeLabel: t('results.verifiedFromBarcode'),
+    })
+  }, [actionsFor, isVisitor, t])
+
+  const { state: shareState, share } = useShareCard(buildCard)
+
+  // Close the sheet once the share resolves — success or the user backing out
+  // of the OS share sheet both land on 'idle'. A failure stays 'error' so the
+  // message has somewhere to be read.
+  const previousShareState = useRef(shareState)
   useEffect(() => {
-    if (isVisitor) return
-    fetchHistory()
-      .then(setFetched)
-      .catch((e) => {
-        if (e.code === 'UNAUTHENTICATED') onAuthExpired?.()
-        else setError(true)
-      })
-  }, [isVisitor, onAuthExpired])
+    if (previousShareState.current === 'preparing' && shareState === 'idle') {
+      setActionsFor(null)
+    }
+    previousShareState.current = shareState
+  }, [shareState])
 
-  useEffect(() => {
-    // Visitors already have the full result in memory (visitorEntries) — no
-    // server round trip needed, and there's no session to fetch it from anyway.
-    if (selectedId == null || isVisitor) return
-    setDetail(null)
-    setDetailError(false)
-    fetchHistoryDetail(selectedId)
-      .then(setDetail)
-      .catch((e) => {
-        if (e.code === 'UNAUTHENTICATED') onAuthExpired?.()
-        else setDetailError(true)
-      })
-  }, [selectedId, isVisitor, onAuthExpired])
-
-  const entries = isVisitor ? visitorEntries : fetched
+  const handleExportPdf = async (id) => {
+    setPdfState('working')
+    try {
+      await exportHistoryPdf(id)
+      setPdfState('idle')
+      setActionsFor(null)
+    } catch {
+      setPdfState('error')
+    }
+  }
 
   const handleDelete = async (id) => {
     setDeleting(true)
@@ -94,66 +137,21 @@ function MealsHistory({ onAuthExpired, isVisitor, visitorEntries, onDeleteVisito
         onDeleteVisitorEntry?.(id)
       } else {
         await deleteHistoryEntry(id)
-        setFetched((prev) => prev?.filter((e) => e.id !== id) ?? prev)
+        removeEntry(id)
       }
       setConfirmDeleteId(null)
-    } catch (e) {
-      if (e.code === 'UNAUTHENTICATED') onAuthExpired?.()
-      else setDeleteError(true)
+    } catch {
+      setDeleteError(true)
     } finally {
       setDeleting(false)
     }
   }
 
-  if (selectedId != null) {
-    if (isVisitor) {
-      const entry = visitorEntries?.find((e) => e.id === selectedId)
-      if (!entry?.result) return null
-      return (
-        <ResultsScreen
-          result={entry.result}
-          dailyBudget={dailyBudget}
-          goal={goal}
-          onSnapAnother={() => setSelectedId(null)}
-          actionLabel={t('results.backToHistory')}
-          shareImageSource={entry.thumbnail}
-        />
-      )
-    }
-    if (detailError) {
-      return (
-        <div className="pt-16 text-center">
-          <p className="text-sm text-slate-500 dark:text-slate-400">{t('history.couldntLoadDetail')}</p>
-          <button
-            onClick={() => setSelectedId(null)}
-            className="mt-4 text-sm font-medium text-grade-aplus dark:text-green-400"
-          >
-            {t('results.backToHistory')}
-          </button>
-        </div>
-      )
-    }
-    if (!detail) {
-      return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('history.loading')}</p>
-    }
-    return (
-      <ResultsScreen
-        result={detail}
-        dailyBudget={dailyBudget}
-        goal={goal}
-        onSnapAnother={() => setSelectedId(null)}
-        actionLabel={t('results.backToHistory')}
-        onExportPdf={isVisitor ? undefined : () => exportHistoryPdf(selectedId)}
-        shareImageSource={entries?.find((e) => e.id === selectedId)?.thumbnail}
-      />
-    )
-  }
-
-  if (!isVisitor && error) {
+  if (error) {
     return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('history.couldntLoadHistory')}</p>
   }
-  if (!entries) {
-    return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('history.loading')}</p>
+  if (loading || !entries) {
+    return <HistoryListSkeleton label={t('history.loading')} />
   }
   if (entries.length === 0) {
     return (
@@ -175,13 +173,13 @@ function MealsHistory({ onAuthExpired, isVisitor, visitorEntries, onDeleteVisito
   return (
     <div className="space-y-4">
       {isVisitor && <SignInBanner text={t('history.visitorEphemeralNotice')} />}
-      <WeeklyCaloriesChart entries={entries} dailyBudget={dailyBudget} />
+      <WeeklyCaloriesChart entries={recent ?? entries} dailyBudget={dailyBudget} />
       <ul className="space-y-2">
         {entries.map((entry) => (
           <li key={entry.id} className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelectedId(entry.id)}
+              onClick={() => navigate(`meal/${entry.id}`)}
               className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm dark:border-slate-700 dark:bg-slate-800"
             >
               {entry.thumbnail ? (
@@ -220,19 +218,83 @@ function MealsHistory({ onAuthExpired, isVisitor, visitorEntries, onDeleteVisito
                 </span>
               </span>
             </button>
-            {/* 🗑️ not ⋮ — the button goes straight to the delete confirmation,
-                so a "more options" glyph promised a menu that never existed. */}
+            {/* ⋮ now that there is a menu behind it. It was a 🗑️ while delete
+                was the only thing a row could do — an overflow glyph that opens
+                one destructive action is a trap. */}
             <button
               type="button"
-              onClick={() => setConfirmDeleteId(entry.id)}
-              aria-label={t('history.deleteMeal')}
-              className="shrink-0 rounded-full p-2 text-lg text-slate-500 active:bg-slate-100 dark:text-slate-400 dark:active:bg-slate-700"
+              onClick={() => {
+                setPdfState('idle')
+                setActionsFor(entry)
+              }}
+              aria-label={t('history.moreOptions')}
+              aria-haspopup="menu"
+              className="shrink-0 rounded-full px-2 py-2 text-slate-500 active:bg-slate-100 dark:text-slate-400 dark:active:bg-slate-700"
             >
-              🗑️
+              <DotsIcon />
             </button>
           </li>
         ))}
       </ul>
+
+      {actionsFor && (
+        <Dialog
+          onClose={() => {
+            if (shareState === 'preparing' || pdfState === 'working') return
+            setActionsFor(null)
+          }}
+          ariaLabel={t('history.mealOptions')}
+          closeOnBackdrop
+          overlayClassName="fixed inset-0 z-30 flex items-end justify-center bg-black/40 px-4 pb-4"
+          panelClassName="w-full max-w-sm rounded-3xl bg-white p-2 shadow-xl dark:bg-slate-800"
+        >
+          <p className="truncate px-4 pb-1 pt-2 text-center text-xs text-slate-500 dark:text-slate-400">
+            {actionsFor.summary}
+          </p>
+          {/* history.* labels, not results.* — the results strings carry their
+              own emoji for the buttons on the detail screen, which is exactly
+              what threw this menu's alignment out. */}
+          <SheetAction
+            onClick={share}
+            disabled={shareState === 'preparing'}
+            icon={<ShareGlyph className="h-5 w-5" />}
+            label={shareState === 'preparing' ? t('results.preparingShare') : t('history.share')}
+          />
+          {/* Server-side, so it needs a saved row and a session — a visitor's
+              meals are neither. Hidden rather than shown-and-refused. */}
+          {!isVisitor && (
+            <SheetAction
+              onClick={() => handleExportPdf(actionsFor.id)}
+              disabled={pdfState === 'working'}
+              icon={<DocIcon />}
+              label={pdfState === 'working' ? t('results.preparingPdf') : t('history.exportPdf')}
+            />
+          )}
+          <SheetAction
+            onClick={() => {
+              const { id } = actionsFor
+              setActionsFor(null)
+              setConfirmDeleteId(id)
+            }}
+            label={t('history.deleteMeal')}
+            icon={<TrashIcon />}
+            destructive
+          />
+          {(shareState === 'error' || pdfState === 'error') && (
+            <p role="alert" className="px-4 pb-1 pt-2 text-center text-xs text-red-500 dark:text-red-400">
+              {shareState === 'error' ? t('results.shareError') : t('results.exportError')}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setActionsFor(null)}
+            disabled={shareState === 'preparing' || pdfState === 'working'}
+            className="mt-1 w-full rounded-2xl py-3 text-sm font-semibold text-slate-500 disabled:opacity-40 active:bg-slate-100 dark:text-slate-400 dark:active:bg-slate-700"
+          >
+            {t('history.cancel')}
+          </button>
+        </Dialog>
+      )}
 
       {confirmDeleteId != null && (
         <Dialog
@@ -279,11 +341,9 @@ function MealsHistory({ onAuthExpired, isVisitor, visitorEntries, onDeleteVisito
 /** Menu scans are only ever persisted for signed-in users (see MenuRankingService) — visitors get a sign-in prompt instead of an in-session list, since there's nothing ephemeral to show here. */
 function MenuHistory({ isVisitor }) {
   const { t, lang } = useLanguage()
+  const navigate = useNavigate()
   const [fetched, setFetched] = useState(null)
   const [error, setError] = useState(false)
-  const [selectedId, setSelectedId] = useState(null)
-  const [detail, setDetail] = useState(null)
-  const [detailError, setDetailError] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(false)
@@ -294,15 +354,6 @@ function MenuHistory({ isVisitor }) {
       .then(setFetched)
       .catch(() => setError(true))
   }, [isVisitor])
-
-  useEffect(() => {
-    if (selectedId == null) return
-    setDetail(null)
-    setDetailError(false)
-    fetchMenuHistoryDetail(selectedId)
-      .then(setDetail)
-      .catch(() => setDetailError(true))
-  }, [selectedId])
 
   const handleDelete = async (id) => {
     setDeleting(true)
@@ -327,37 +378,11 @@ function MenuHistory({ isVisitor }) {
     )
   }
 
-  if (selectedId != null) {
-    if (detailError) {
-      return (
-        <div className="pt-16 text-center">
-          <p className="text-sm text-slate-500 dark:text-slate-400">{t('history.couldntLoadDetail')}</p>
-          <button
-            onClick={() => setSelectedId(null)}
-            className="mt-4 text-sm font-medium text-grade-aplus dark:text-green-400"
-          >
-            {t('results.backToHistory')}
-          </button>
-        </div>
-      )
-    }
-    if (!detail) {
-      return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('history.loading')}</p>
-    }
-    return (
-      <MenuResultsScreen
-        result={detail}
-        onScanAnother={() => setSelectedId(null)}
-        actionLabel={t('results.backToHistory')}
-      />
-    )
-  }
-
   if (error) {
     return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('history.couldntLoadHistory')}</p>
   }
   if (!fetched) {
-    return <p className="pt-16 text-center text-sm text-slate-500 dark:text-slate-400">{t('history.loading')}</p>
+    return <MenuListSkeleton label={t('history.loading')} />
   }
   if (fetched.length === 0) {
     return (
@@ -375,7 +400,12 @@ function MenuHistory({ isVisitor }) {
           <li key={entry.id} className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelectedId(entry.id)}
+              // Route-relative, exactly like the meal link above. It used to be
+              // `../menu/:id` with relative:'path', which walks up a URL segment
+              // rather than a route — from /history that resolved to /menu/:id,
+              // matched App.jsx's catch-all, and redirected the user to the
+              // capture screen instead of opening their scan.
+              onClick={() => navigate(`menu/${entry.id}`)}
               className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm dark:border-slate-700 dark:bg-slate-800"
             >
               {entry.thumbnail ? (
@@ -449,6 +479,243 @@ function MenuHistory({ isVisitor }) {
           </div>
         </Dialog>
       )}
+    </div>
+  )
+}
+
+/**
+ * A saved meal, reachable at /history/meal/:id — so it survives a refresh, can
+ * be linked to, and above all answers the back button instead of exiting the
+ * app, which is what it did when this was component state.
+ */
+function MealDetail({ isVisitor, dailyBudget, goal }) {
+  const { t } = useLanguage()
+  const navigate = useNavigate()
+  const { id } = useParams()
+  const { entries, updateEntry } = useHistory()
+  const [detail, setDetail] = useState(null)
+  const [detailError, setDetailError] = useState(false)
+
+  // The thumbnail for the share card comes from the cached list rather than a
+  // second request; the list is already loaded for this session.
+  const listEntry = entries?.find((entry) => String(entry.id) === id)
+
+  useEffect(() => {
+    // Visitors already hold the whole result in memory, and have no session to
+    // fetch it with anyway.
+    if (isVisitor) return
+    setDetail(null)
+    setDetailError(false)
+    fetchHistoryDetail(id)
+      .then(setDetail)
+      .catch(() => setDetailError(true))
+  }, [id, isVisitor])
+
+  const backToList = () => navigate('/history')
+
+  if (isVisitor) {
+    if (!listEntry?.result) {
+      return <DetailMissing onBack={backToList} />
+    }
+    return (
+      <ResultsScreen
+        result={listEntry.result}
+        dailyBudget={dailyBudget}
+        goal={goal}
+        onSnapAnother={backToList}
+        actionLabel={<BackToHistoryLabel />}
+        shareImageSource={listEntry.thumbnail}
+      />
+    )
+  }
+  if (detailError) {
+    return <DetailMissing onBack={backToList} />
+  }
+  if (!detail) {
+    return <DetailSkeleton label={t('history.loading')} />
+  }
+  return (
+    <ResultsScreen
+      result={detail}
+      dailyBudget={dailyBudget}
+      goal={goal}
+      onSnapAnother={backToList}
+      actionLabel={<BackToHistoryLabel />}
+      onExportPdf={() => exportHistoryPdf(id)}
+      shareImageSource={listEntry?.thumbnail}
+      onResultCorrected={(corrected) => {
+        setDetail(corrected)
+        // The list row for this meal is now stale in three columns. Patching it
+        // is cheaper and steadier than a refetch, which would re-download every
+        // entry's inline thumbnail to learn what this response already said.
+        updateEntry(Number(id), {
+          calories: corrected.totals.calories,
+          score: corrected.score,
+          grade: corrected.grade,
+        })
+      }}
+    />
+  )
+}
+
+/** Same, for a saved menu scan. Menu scans are never kept for visitors. */
+function MenuDetail() {
+  const { t } = useLanguage()
+  const navigate = useNavigate()
+  const { id } = useParams()
+  const [detail, setDetail] = useState(null)
+  const [detailError, setDetailError] = useState(false)
+
+  useEffect(() => {
+    setDetail(null)
+    setDetailError(false)
+    fetchMenuHistoryDetail(id)
+      .then(setDetail)
+      .catch(() => setDetailError(true))
+  }, [id])
+
+  const backToList = () => navigate('/history?view=menus')
+
+  if (detailError) {
+    return <DetailMissing onBack={backToList} />
+  }
+  if (!detail) {
+    return <DetailSkeleton label={t('history.loading')} />
+  }
+  return (
+    <MenuResultsScreen
+      result={detail}
+      onScanAnother={backToList}
+      actionLabel={<BackToHistoryLabel />}
+      // No photo here on purpose: the menu list is fetched by MenuList, not by
+      // this route, so there is no thumbnail in scope to hand over. The share
+      // card falls back to its 📋 tile, which is a better outcome than
+      // refetching the whole list to decorate one image.
+    />
+  )
+}
+
+/**
+ * "Back to history", with the clock that names where it goes.
+ *
+ * The label used to carry a "⬅" in all three translation files. U+2B05 defaults
+ * to *emoji* presentation, so Android drew a blue arrow that could not take the
+ * button's white — and the same string is reused on a small green text link,
+ * where an arrow suited it even less. Drawing it here means each call site gets
+ * the icon at its own colour and size, and translators own only words.
+ *
+ * A clock rather than an arrow because it names the destination instead of the
+ * direction: this is a jump to a tab, not a step back through the stack.
+ */
+export function BackToHistoryLabel() {
+  const { t } = useLanguage()
+  return (
+    <>
+      <HistoryClockIcon />
+      <span>{t('results.backToHistory')}</span>
+    </>
+  )
+}
+
+function HistoryClockIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="h-[1.15em] w-[1.15em] flex-none"
+    >
+      {/* Counter-clockwise dial with its rewind tick, then the hands */}
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 4v4h4" />
+      <path d="M12 8v4l3 2" />
+    </svg>
+  )
+}
+
+/**
+ * The overflow glyph, drawn rather than typed.
+ *
+ * "⋮" as a text character is a hair-thin vertical ellipsis at this size and
+ * lands on a different baseline in every font. Three circles are the same
+ * everywhere, and inherit the button's colour.
+ */
+function DotsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="h-5 w-5">
+      <circle cx="12" cy="5" r="1.9" />
+      <circle cx="12" cy="12" r="1.9" />
+      <circle cx="12" cy="19" r="1.9" />
+    </svg>
+  )
+}
+
+/**
+ * One row of the meal action sheet.
+ *
+ * The icon sits in a fixed-width slot so every label starts at the same x. The
+ * first version of this let two rows carry their icon inside the translated
+ * string ("📤 Share", separated by a space character) while the third passed one
+ * as a sibling with the flex `gap` between them — so the labels started ~8px
+ * apart, and the row shifted sideways when it swapped to "Preparing image…",
+ * which has no emoji at all. Icons belong to the layout, not the copy.
+ */
+function SheetAction({ onClick, label, icon, disabled, destructive }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3.5 text-left text-sm font-semibold disabled:opacity-50 active:bg-slate-100 dark:active:bg-slate-700 ${
+        destructive ? 'text-red-600 dark:text-red-400' : 'text-slate-800 dark:text-slate-100'
+      }`}
+    >
+      <span className="flex h-5 w-5 flex-none items-center justify-center">{icon}</span>
+      <span>{label}</span>
+    </button>
+  )
+}
+
+/** Filled sheet icons, sized to the 20px slot and inheriting the row's colour. */
+function DocIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-5 w-5">
+      <path d="M14.5 2.8H7a2 2 0 0 0-2 2v14.4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.3Z" />
+      <path d="M14.3 2.8v4.6h4.6" />
+      <path d="M8.6 13.2h6.8M8.6 16.6h4.4" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-5 w-5">
+      <path d="M4 6.6h16" />
+      <path d="M9.4 6.6V4.9a1.4 1.4 0 0 1 1.4-1.4h2.4a1.4 1.4 0 0 1 1.4 1.4v1.7" />
+      <path d="M6.4 6.6l.9 12.6a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.9-12.6" />
+      <path d="M10.4 10.6v6M13.6 10.6v6" />
+    </svg>
+  )
+}
+
+/** Shared by both detail routes — also what a stale bookmark to a deleted meal lands on. */
+function DetailMissing({ onBack }) {
+  const { t } = useLanguage()
+  return (
+    <div className="pt-16 text-center">
+      <p className="text-sm text-slate-500 dark:text-slate-400">{t('history.couldntLoadDetail')}</p>
+      <button
+        onClick={onBack}
+        className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-grade-aplus dark:text-green-400"
+      >
+        <BackToHistoryLabel />
+      </button>
     </div>
   )
 }

@@ -75,8 +75,9 @@ class MenuControllerTest {
     /** grams chosen so the dish is a single-item "meal" clearly outside small-snack territory (>250 kcal). */
     private static IdentifiedFood dish(String name, String group, boolean fried,
                                         double caloriesPer100g, double sodiumPer100g, double grams) {
-        return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams,
-                name, caloriesPer100g, 8, 15, 6, 1.5, 2, sodiumPer100g, group, fried, 0.9);
+        return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams, grams * 0.8, grams * 1.2,
+                name, caloriesPer100g, 8, 15, 6, 1.5, 2, sodiumPer100g, group,
+                fried ? "deep-fried" : "steamed", 0.9);
     }
 
     private static List<IdentifiedFood> spreadAcrossTiers() {

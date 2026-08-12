@@ -29,7 +29,7 @@ class FeedbackServiceTest {
     @BeforeEach
     void setUp() {
         feedbackService = new FeedbackService(
-                context -> { throw new UnsupportedOperationException("Gemini not expected in this test"); },
+                (context, lang) -> { throw new UnsupportedOperationException("Gemini not expected in this test"); },
                 new AppProperties(), // no Gemini key configured -> always routes through the rule-based path
                 new ScoringProperties());
     }
