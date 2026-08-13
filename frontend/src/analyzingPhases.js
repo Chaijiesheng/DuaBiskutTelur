@@ -21,7 +21,14 @@
 
 /** Stage boundaries in milliseconds since the request started. */
 const MEAL_STAGES = [0, 4000, 9000]
-const MENU_STAGES = [0, 5000, 14000]
+/**
+ * Four stages, not three, and far later boundaries than the meal flow — these
+ * come from the "Menu scan finished" timing log in MenuRankingService rather
+ * than from a guess. A menu sends a bigger image, waits on the model to emit a
+ * JSON array of up to 60 dishes, then resolves nutrition for each one, so the
+ * middle stretch genuinely runs past half a minute.
+ */
+const MENU_STAGES = [0, 3000, 36000, 41000]
 const BARCODE_STAGES = [0, 1500]
 
 export const STAGE_COUNTS = {
@@ -40,7 +47,10 @@ export const STAGE_COUNTS = {
  */
 const OVERDUE_MS = {
   meal: 20000,
-  menu: 30000,
+  // Past the last measured menu stage (41s), not before it — at the old 30s
+  // this announced "taking longer than usual" while the scan was still inside
+  // its normal window, which is the opposite of reassuring.
+  menu: 60000,
   barcode: 8000,
 }
 

@@ -38,7 +38,6 @@ public class AppProperties {
      */
     private List<String> geminiMenuModels = new ArrayList<>(List.of(
             "gemini-flash-latest", "gemini-2.5-flash"));
-
     /**
      * Origins allowed to make credentialed cross-origin API calls. Only the
      * Vite dev server needs this — in production the frontend is served
@@ -127,7 +126,20 @@ public class AppProperties {
      * afresh — e.g. when a batch of entries was pinned during a USDA outage.
      */
     private boolean nutritionCacheEnabled = true;
-
+    /**
+     * Whether a rejected USDA match falls back to the curated local dish table
+     * before the model's own estimate.
+     *
+     * <p>Off by default: measured on the 30-dish benchmark it made production
+     * rankings worse (rho 0.42-0.58 over three scans, against 0.63 without it).
+     * The offline study that justified it assumed the table would rescue the
+     * five dishes whose nutrition was arithmetically impossible; in production
+     * the validator rejects 10-15 per scan, so the table displaces sound USDA
+     * data far more often than intended. Re-enable once the gate rejects on
+     * per-serving totals rather than per-100g density — see
+     * docs/menu-ranking-evaluation.md.
+     */
+    private boolean localDishTableEnabled = false;
     /** Configured Gemini keys with blanks removed, in priority order. */
     public List<String> nonBlankGeminiApiKeys() {
         return geminiApiKeys.stream()
@@ -151,6 +163,8 @@ public class AppProperties {
     public void setGeminiVisionModels(List<String> v) { this.geminiVisionModels = v; }
     public List<String> getGeminiFeedbackModels() { return geminiFeedbackModels; }
     public void setGeminiFeedbackModels(List<String> v) { this.geminiFeedbackModels = v; }
+    public List<String> getGeminiMenuModels() { return geminiMenuModels; }
+    public void setGeminiMenuModels(List<String> v) { this.geminiMenuModels = v; }
     public List<String> getCorsAllowedOrigins() { return corsAllowedOrigins; }
     public void setCorsAllowedOrigins(List<String> v) { this.corsAllowedOrigins = v; }
     public String getUsdaApiKey() { return usdaApiKey; }
@@ -163,6 +177,10 @@ public class AppProperties {
     public void setConnectTimeoutMs(int v) { this.connectTimeoutMs = v; }
     public int getReadTimeoutMs() { return readTimeoutMs; }
     public void setReadTimeoutMs(int v) { this.readTimeoutMs = v; }
+    public boolean isLocalDishTableEnabled() { return localDishTableEnabled; }
+    public void setLocalDishTableEnabled(boolean v) { this.localDishTableEnabled = v; }
+    public int getMenuReadTimeoutMs() { return menuReadTimeoutMs; }
+    public void setMenuReadTimeoutMs(int v) { this.menuReadTimeoutMs = v; }
     public int getUsdaRetries() { return usdaRetries; }
     public void setUsdaRetries(int v) { this.usdaRetries = v; }
     public int getUsdaReadTimeoutMs() { return usdaReadTimeoutMs; }
@@ -171,10 +189,6 @@ public class AppProperties {
     public void setMenuResolveParallelism(int v) { this.menuResolveParallelism = v; }
     public int getGeminiBudgetMs() { return geminiBudgetMs; }
     public void setGeminiBudgetMs(int v) { this.geminiBudgetMs = v; }
-    public List<String> getGeminiMenuModels() { return geminiMenuModels; }
-    public void setGeminiMenuModels(List<String> v) { this.geminiMenuModels = v; }
-    public int getMenuReadTimeoutMs() { return menuReadTimeoutMs; }
-    public void setMenuReadTimeoutMs(int v) { this.menuReadTimeoutMs = v; }
     public int getGeminiMenuBudgetMs() { return geminiMenuBudgetMs; }
     public void setGeminiMenuBudgetMs(int v) { this.geminiMenuBudgetMs = v; }
     public int getGeminiFeedbackBudgetMs() { return geminiFeedbackBudgetMs; }

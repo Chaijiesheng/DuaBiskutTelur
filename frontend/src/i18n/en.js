@@ -49,13 +49,19 @@ export default {
     titleMenu: 'Reading your menu',
     cancel: 'Cancel',
     takes: 'This usually takes 10–20 seconds.',
+    takesMenu: 'A menu takes longer — usually about a minute.',
     takesBarcode: 'This usually takes a few seconds.',
     late: 'Taking longer than usual — still working.',
     tipLabel: 'Tip for you',
     anotherTip: 'Show another tip',
     stages: {
       meal: ['Reading your photo', 'Looking up nutrition', 'Writing your feedback'],
-      menu: ['Reading the menu', 'Looking up each dish', 'Ranking them'],
+      menu: [
+        'Uploading the photo',
+        'Reading the dishes',
+        'Looking up nutrition',
+        'Ranking healthiness',
+      ],
       barcode: ['Looking up the product', 'Writing your feedback'],
     },
     insights: [
@@ -185,9 +191,14 @@ export default {
     emptyTier: 'No dishes landed here',
     scanAnother: 'Scan another menu',
     notSaved: "Your sign-in expired, so this scan wasn't saved. Sign in again to keep saving menus.",
+    tapHint: 'Tap any dish to see its nutrition.',
+    relativeNotice:
+      'Everything on this menu scored in a similar range, so these tiers rank the dishes against each other here — not on an absolute health scale.',
+    addOnsTitle: 'Add-ons & drinks',
+    addOnsNote: "Sides, condiments and drinks aren't ranked — they're extras, not something you'd order instead of a main.",
     howTiersWork: {
       title: 'How tiers work',
-      body: 'Each dish is scored the same way as a logged meal — balance, nutrient quality, portion, and variety — then mapped onto a tier.',
+      body: 'Each dish is scored mostly on nutrient quality — deep-frying, sodium, sugar, fiber and vegetables — plus how sensible the portion is and how its protein/carb/fat split looks. Dishes are then ranked healthiest first and mapped onto a tier. Sides and drinks are listed separately rather than ranked. When no dish on a menu is a clearly healthy choice, the tiers rank them against each other instead, so the list still shows which options are the better ones.',
     },
   },
   scoringRubric: {

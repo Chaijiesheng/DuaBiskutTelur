@@ -330,4 +330,91 @@ class ScoringServiceTest {
                     calories + " kcal should be exempt, not under-eating");
         }
     }
+
+    // ---- menu-dish profile ----
+
+    /**
+     * The meal scorer exempts a lone sub-250kcal item from portion and variety
+     * judgement so a packaged snack isn't graded as an incomplete meal. Every
+     * menu dish is a lone item, so that exemption applied to all of them and
+     * handed 30 free points to whatever happened to be small — which is how a
+     * spoon of sambal came to outrank every real dish on a menu.
+     */
+    @Test
+    void menuProfileDoesNotHandFreePointsToSmallItems() {
+        FoodItem condiment = food("Sambal", "vegetable", false, 75, 1.4, 9.8, 3.6, 1.8, 6.2, 380);
+
+        ScoreResult asMeal = scoring.score(List.of(condiment), Totals.of(List.of(condiment)), 2000);
+        ScoreResult asMenuDish = scoring.scoreMenuDish(condiment, 2000);
+
+        assertEquals(20.0, asMeal.portionPoints(), 0.01, "meal scoring exempts it entirely");
+        assertTrue(asMenuDish.portionPoints() < 10.0,
+                "a 75kcal item is a token portion for a dish, got " + asMenuDish.portionPoints());
+        assertTrue(asMenuDish.score() < asMeal.score(),
+                "the condiment should stop outscoring itself once the exemption is gone");
+    }
+
+    @Test
+    void menuProfileDropsVarietyEntirely() {
+        FoodItem dish = food("Chicken rice", "grain", false, 600, 30, 85, 12, 2, 2, 900);
+
+        assertEquals(0.0, scoring.scoreMenuDish(dish, 2000).varietyPoints(), 0.01,
+                "one dish is always one food group, so variety can only add a constant");
+    }
+
+    /**
+     * Portion used to be flat across the whole 250-1000kcal band, so a light
+     * porridge and a heavy fried rice scored identically on it.
+     */
+    @Test
+    void menuPortionSlidesInsteadOfPlateauing() {
+        FoodItem light = food("Porridge", "grain", false, 350, 18, 50, 7, 1.5, 1, 400);
+        FoodItem heavy = food("Big fried rice", "grain", false, 950, 28, 120, 34, 3, 5, 600);
+        FoodItem huge = food("Family platter", "grain", false, 1600, 50, 180, 70, 4, 8, 700);
+
+        double lightPortion = scoring.scoreMenuDish(light, 2000).portionPoints();
+        double heavyPortion = scoring.scoreMenuDish(heavy, 2000).portionPoints();
+        double hugePortion = scoring.scoreMenuDish(huge, 2000).portionPoints();
+
+        assertEquals(25.0, lightPortion, 0.01, "a sensible dish keeps full marks");
+        assertTrue(heavyPortion > 0 && heavyPortion < lightPortion,
+                "a much bigger dish should lose some, not all, portion marks: " + heavyPortion);
+        assertEquals(0.0, hugePortion, 0.01, "most of a day's calories in one dish scores nothing");
+    }
+
+    /**
+     * Fixed penalty cliffs collapsed a whole menu onto three quality values,
+     * leaving macro ratio to decide the ordering.
+     */
+    @Test
+    void menuQualityPenaltiesAreGraduatedNotCliffs() {
+        FoodItem clean = food("Steamed fish", "protein", false, 400, 40, 5, 12, 2, 1, 700);
+        FoodItem slightlySalty = food("Steamed fish", "protein", false, 400, 40, 5, 12, 2, 1, 900);
+        FoodItem verySalty = food("Steamed fish", "protein", false, 400, 40, 5, 12, 2, 1, 1600);
+
+        double cleanQ = scoring.scoreMenuDish(clean, 2000).qualityPoints();
+        double slightQ = scoring.scoreMenuDish(slightlySalty, 2000).qualityPoints();
+        double veryQ = scoring.scoreMenuDish(verySalty, 2000).qualityPoints();
+
+        assertTrue(cleanQ > slightQ && slightQ > veryQ,
+                "sodium should bite progressively, got " + cleanQ + " / " + slightQ + " / " + veryQ);
+        assertTrue(cleanQ - slightQ < veryQ + 0.01 - veryQ + (cleanQ - veryQ) / 2,
+                "just over the threshold should cost far less than double it");
+    }
+
+    /** Meal grading must be untouched by any of the above. */
+    @Test
+    void mealScoringIsUnchangedByTheMenuProfile() {
+        List<FoodItem> meal = List.of(
+                food("Rice", "grain", false, 300, 6, 65, 1, 1, 0, 5),
+                food("Grilled chicken", "protein", false, 250, 35, 0, 11, 0, 0, 400),
+                food("Vegetables", "vegetable", false, 90, 4, 12, 3, 5, 4, 200));
+
+        ScoreResult result = scoring.score(meal, Totals.of(meal), 2000);
+
+        assertEquals(20.0, result.portionPoints(), 0.01);
+        assertEquals(10.0, result.varietyPoints(), 0.01, "three food groups still earn full variety");
+        assertTrue(result.qualityPoints() <= 30.0, "meal quality still uses the 30-point scale");
+        assertTrue(result.balancePoints() <= 40.0, "meal balance still uses the 40-point scale");
+    }
 }

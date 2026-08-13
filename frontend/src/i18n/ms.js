@@ -49,13 +49,19 @@ export default {
     titleMenu: 'Membaca menu anda',
     cancel: 'Batal',
     takes: 'Biasanya ini mengambil masa 10–20 saat.',
+    takesMenu: 'Menu mengambil masa lebih lama — biasanya sekitar seminit.',
     takesBarcode: 'Biasanya ini mengambil masa beberapa saat.',
     late: 'Mengambil masa lebih lama daripada biasa — masih diproses.',
     tipLabel: 'Tip untuk anda',
     anotherTip: 'Tunjukkan tip lain',
     stages: {
       meal: ['Membaca gambar anda', 'Mencari maklumat pemakanan', 'Menulis maklum balas'],
-      menu: ['Membaca menu', 'Mencari setiap hidangan', 'Menyusun kedudukan'],
+      menu: [
+        'Memuat naik foto',
+        'Membaca hidangan',
+        'Mencari data nutrien',
+        'Menyusun tahap kesihatan',
+      ],
       barcode: ['Mencari produk', 'Menulis maklum balas'],
     },
     insights: [
@@ -183,9 +189,14 @@ export default {
     emptyTier: 'Tiada hidangan di tahap ini',
     scanAnother: 'Imbas menu lain',
     notSaved: 'Log masuk anda telah tamat tempoh, jadi imbasan ini tidak disimpan. Log masuk semula untuk terus menyimpan menu.',
+    tapHint: 'Ketik mana-mana hidangan untuk melihat nutriennya.',
+    relativeNotice:
+      'Semua hidangan dalam menu ini mendapat skor yang lebih kurang sama, jadi tahap di sini menyusun hidangan berbanding satu sama lain — bukan pada skala kesihatan mutlak.',
+    addOnsTitle: 'Tambahan & minuman',
+    addOnsNote: 'Lauk sampingan, perencah dan minuman tidak disusun — ia tambahan, bukan pengganti hidangan utama.',
     howTiersWork: {
       title: 'Cara tahap berfungsi',
-      body: 'Setiap hidangan dinilai dengan cara yang sama seperti makanan yang direkodkan — keseimbangan, kualiti nutrien, saiz hidangan dan kepelbagaian — kemudian dipetakan ke tahap tertentu.',
+      body: 'Setiap hidangan dinilai terutamanya berdasarkan kualiti nutrien — goreng, natrium, gula, serat dan sayuran — serta sama ada saiz hidangan munasabah dan bagaimana nisbah protein/karbohidrat/lemaknya. Hidangan kemudian disusun bermula dengan yang paling sihat dan dipetakan ke tahap tertentu. Lauk sampingan dan minuman disenaraikan berasingan, bukan disusun. Apabila tiada hidangan dalam menu yang jelas sihat, tahap akan menyusunnya berbanding satu sama lain supaya senarai masih menunjukkan pilihan yang lebih baik.',
     },
   },
   scoringRubric: {

@@ -93,7 +93,7 @@ class PortionCorrectionEndpointTest {
 
     private static IdentifiedFood food(String name, double grams, String group) {
         return new IdentifiedFood(name, "1 plate / ~" + (int) grams + "g", grams, grams * 0.8, grams * 1.2,
-                name, 200, 10, 25, 8, 2, 3, 400, group, "steamed", 0.9);
+                name, 200, 10, 25, 8, 2, 3, 400, group, "steamed", 0.9, null);
     }
 
     /** Analyzes a two-item meal and returns the saved entry id. */

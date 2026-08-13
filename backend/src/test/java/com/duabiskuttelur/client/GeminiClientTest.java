@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -104,6 +105,45 @@ class GeminiClientTest {
         assertTrue(client.identifyMenuDishes(FAKE_IMAGE, "image/jpeg").isEmpty(),
                 "the menu call did not complete within its own read timeout");
     }
+
+    /**
+     * A model that burned the read timeout is written off for the rest of the
+     * call. Re-dialling it once per backoff round would multiply the request's
+     * latency by the number of rounds and push a real menu scan past the CDN's
+     * proxy timeout, so the call has to give up as soon as every model is dead
+     * rather than sleeping through the 2s/4s/8s schedule first.
+     */
+    @Test
+    void aTimedOutModelIsNotDialledAgainDuringTheSameCall() throws Exception {
+        int readTimeoutMs = 400;
+        AtomicInteger attempts = new AtomicInteger();
+
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.setExecutor(Executors.newCachedThreadPool());
+        server.createContext("/v1beta/models/model-a:generateContent", exchange -> {
+            attempts.incrementAndGet();
+            try {
+                Thread.sleep(readTimeoutMs + 1_200);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            respondOk(exchange, "\"[]\"");
+        });
+        server.start();
+
+        AppProperties props = propsFor(server.getAddress().getPort(), readTimeoutMs, List.of("model-a"));
+        GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
+
+        long startedAt = System.currentTimeMillis();
+        assertThrows(ProviderBusyException.class, () -> client.identifyFoods(FAKE_IMAGE, "image/jpeg"));
+        long elapsedMs = System.currentTimeMillis() - startedAt;
+
+        assertEquals(1, attempts.get(), "the hung model should be dialled once, not once per backoff round");
+        assertTrue(elapsedMs < 5_000,
+                "should fail fast when every model is dead instead of sleeping the 14s backoff; took " + elapsedMs + "ms");
+    }
+
+    /** Menu scans run their own model chain and read timeout, not the vision ones. */
 
     private AppProperties propsFor(int port, int readTimeoutMs, List<String> models) {
         AppProperties props = new AppProperties();

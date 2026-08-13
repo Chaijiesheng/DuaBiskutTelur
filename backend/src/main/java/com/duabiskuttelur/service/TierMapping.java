@@ -1,5 +1,6 @@
 package com.duabiskuttelur.service;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -36,5 +37,26 @@ public final class TierMapping {
             case "C" -> "NPC";
             default -> "LAWANLE";
         };
+    }
+
+    /**
+     * Tier code per position for {@code dishCount} dishes already ordered
+     * healthiest-first, spread as evenly as the count allows: every tier gets
+     * {@code dishCount / 5}, and any leftover goes to the better tiers first.
+     * Used when absolute grades would clump everything into one or two tiers
+     * (see MenuRankingService.useRelativeTiers) — the returned list is
+     * positional, so index i is the tier for the i-th healthiest dish.
+     */
+    public static List<String> evenlySpreadTiers(int dishCount) {
+        int base = dishCount / ORDER.size();
+        int remainder = dishCount % ORDER.size();
+        List<String> assignment = new ArrayList<>(dishCount);
+        for (int tier = 0; tier < ORDER.size(); tier++) {
+            int take = base + (tier < remainder ? 1 : 0);
+            for (int i = 0; i < take; i++) {
+                assignment.add(ORDER.get(tier).code());
+            }
+        }
+        return assignment;
     }
 }

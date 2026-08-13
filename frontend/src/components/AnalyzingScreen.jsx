@@ -18,6 +18,17 @@ import { STAGE_COUNTS, isOverdue, stageAt, stageState } from '../analyzingPhases
 const STICK_SHAFT = '#e11d48'
 const STICK_TIP = '#6b7280'
 
+/**
+ * Each flow promises its own duration. A menu is nothing like a plate photo —
+ * the measured stages in analyzingPhases run to 41s — so telling a menu scanner
+ * "10–20 seconds" was a promise the screen broke every time.
+ */
+const TAKES_KEY = {
+  meal: 'analyzing.takes',
+  menu: 'analyzing.takesMenu',
+  barcode: 'analyzing.takesBarcode',
+}
+
 function pickInsight(count, excludeIndex) {
   if (count <= 1) return 0
   let next
@@ -37,7 +48,7 @@ export default function AnalyzingScreen({ titleKey = 'analyzing.title', flow = '
   // so rather than letting a stale promise sit on screen — see isOverdue.
   const subtitle = isOverdue(elapsed, flow)
     ? t('analyzing.late')
-    : t(flow === 'barcode' ? 'analyzing.takesBarcode' : 'analyzing.takes')
+    : t(TAKES_KEY[flow] ?? TAKES_KEY.meal)
 
   return (
     <div className="flex flex-col items-center gap-5 pt-8">

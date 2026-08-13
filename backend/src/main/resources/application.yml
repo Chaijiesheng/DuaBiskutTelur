@@ -108,8 +108,9 @@ app:
   usda-api-key: ${USDA_API_KEY:}
   open-food-facts-base-url: https://world.openfoodfacts.org
   connect-timeout-ms: 10000
-  # Per-call cap. Flash models answer in well under 30s; a hung call must fail
-  # fast so the fallback models get a chance within the gateway time budget.
+  # Per-call cap for plate photos and feedback. Flash models answer these in well
+  # under 30s; a hung call must fail fast so the fallback models get a chance
+  # within the gateway time budget.
   read-timeout-ms: 30000
   # Menu scans need longer: a higher-resolution image in, and a JSON array of up
   # to 60 dishes out. At 30s these were cut off mid-generation and surfaced as
@@ -159,6 +160,12 @@ app:
   # the same dish can't re-roll the USDA-match/model-estimate lottery. Set false
   # to force every scan to resolve afresh — e.g. if a batch of dishes was pinned
   # to model estimates during a USDA outage.
+  # Whether a rejected USDA match falls back to a curated local dish table
+  # before the model's own estimate. OFF: measured on the 30-dish benchmark it
+  # made production rankings worse (rho 0.42-0.58 vs 0.63 without). Re-enable
+  # once the validator rejects on per-serving totals rather than per-100g
+  # density -- see docs/menu-ranking-evaluation.md.
+  local-dish-table-enabled: false
   nutrition-cache-enabled: ${NUTRITION_CACHE_ENABLED:true}
 
 # Scoring engine thresholds — every value here is tunable (see ScoringProperties)

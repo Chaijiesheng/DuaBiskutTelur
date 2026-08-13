@@ -38,7 +38,24 @@ public final class FoodTaxonomy {
     public static final Set<String> COOKING_METHODS = Set.of(
             "deep-fried", "stir-fried", "grilled", "steamed", "boiled", "raw", "baked", "other");
 
+    /**
+     * What a menu item is, as read off the menu's own section headings. Null is
+     * a legitimate value — a plate photo has no sections — and every caller
+     * treats null as a main.
+     */
+    public static final Set<String> MENU_KINDS = Set.of("main", "addon", "drink");
+
     private FoodTaxonomy() {
+    }
+
+    /**
+     * @return the kind in canonical lowercase form, or null if it is not one of
+     *         the three. Normalised here for the same reason group and method
+     *         are: it arrives as free text the model read off a photo, so
+     *         nothing outside the closed vocabulary should reach the ranker.
+     */
+    public static String normalizeKind(String raw) {
+        return normalizeAgainst(raw, MENU_KINDS);
     }
 
     /** @return the group in canonical lowercase form, or null if it is not one of the eight */

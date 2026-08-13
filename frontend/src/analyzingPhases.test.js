@@ -45,7 +45,10 @@ describe('stageAt', () => {
     // A barcode scan does no vision work, so claiming to read a photo would be
     // describing work that is not happening.
     expect(STAGE_COUNTS.barcode).toBe(2)
-    expect(STAGE_COUNTS.menu).toBe(3)
+    // Four, not three: the menu stages now come from the measured "Menu scan
+    // finished" timings rather than a guess, and that telemetry separates the
+    // upload from the model reading the page.
+    expect(STAGE_COUNTS.menu).toBe(4)
     expect(stageAt(2000, 'barcode')).toBe(1)
     expect(stageAt(2000, 'menu')).toBe(0)
   })

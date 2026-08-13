@@ -2,23 +2,17 @@ import { useCallback, useState } from 'react'
 import AccordionSection from './AccordionSection.jsx'
 import FoodCard from './FoodCard.jsx'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
-import { useTheme } from '../theme/ThemeContext.jsx'
-import { TIER_ORDER, TIER_LABELS, TIER_COLORS } from '../tierMeta.js'
+import { TIER_ORDER, TIER_LABELS, TIER_COLORS, TIER_CELL_BG } from '../tierMeta.js'
 import { buildMenuShareCard } from '../shareCard.js'
 import { ShareButton, ShareIconButton, useShareCard } from './ShareControls.jsx'
 
-// Top 2 tiers open by default so a scan immediately shows something without
-// every tier needing a tap; the rest start collapsed like a long menu would.
-const DEFAULT_OPEN = Object.fromEntries(TIER_ORDER.map((tier, i) => [tier, i < 2]))
 
 export default function MenuResultsScreen({ result, onScanAnother, actionLabel, banner, shareImageSource }) {
   const { t } = useLanguage()
-  const { theme } = useTheme()
-  const [openTiers, setOpenTiers] = useState(DEFAULT_OPEN)
   const [howItWorksOpen, setHowItWorksOpen] = useState(false)
-  const { tiers, dishCount, truncated } = result
-
-  const toggle = (tier) => setOpenTiers((prev) => ({ ...prev, [tier]: !prev[tier] }))
+  // { key, dish } — which dish's nutrition is open below the table.
+  const [selected, setSelected] = useState(null)
+  const { tiers, addOns, dishCount, truncated, relative } = result
 
   // tiers[].label comes from the backend (TierMapping), but the frontend's own
   // TIER_LABELS is the source of truth for display — keeping both in sync is
@@ -63,35 +57,101 @@ export default function MenuResultsScreen({ result, onScanAnother, actionLabel, 
         {truncated && (
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t('menuResults.truncatedNotice')}</p>
         )}
+        {relative && (
+          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+            {t('menuResults.relativeNotice')}
+          </p>
+        )}
       </section>
 
-      {TIER_ORDER.map((tier) => {
-        const group = byTier[tier]
-        const dishes = group?.dishes ?? []
-        return (
-          <AccordionSection
-            key={tier}
-            title={
-              <span style={{ color: TIER_COLORS[theme][tier] }} className="text-lg font-black normal-case tracking-normal">
-                {TIER_LABELS[tier]}
-              </span>
-            }
-            badge={<span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{dishes.length}</span>}
-            isOpen={openTiers[tier]}
-            onToggle={() => toggle(tier)}
-          >
-            {dishes.length === 0 ? (
-              <p className="text-xs italic text-slate-400 dark:text-slate-500">{t('menuResults.emptyTier')}</p>
-            ) : (
-              <div className="space-y-2">
-                {dishes.map((dish, i) => (
-                  <FoodCard key={`${dish.name}-${i}`} food={dish.nutrition} />
-                ))}
+      {/* The tier list proper: every dish name is visible in its own tier row
+          without tapping anything, matching the reference tier-list layout.
+          Tapping a name only opens that dish's nutrition below the table, so
+          the rows never reflow underneath the reader's finger. */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm dark:border-slate-700">
+        {TIER_ORDER.map((tier) => {
+          const dishes = byTier[tier]?.dishes ?? []
+          return (
+            <div key={tier} className="flex border-b border-slate-200 last:border-b-0 dark:border-slate-700">
+              <div
+                className="flex w-[72px] shrink-0 items-center justify-center px-1 py-3"
+                style={{ backgroundColor: TIER_CELL_BG[tier] }}
+              >
+                <span className="text-center text-base font-black leading-tight text-white">
+                  {TIER_LABELS[tier]}
+                </span>
               </div>
-            )}
-          </AccordionSection>
-        )
-      })}
+              <div className="flex min-h-[60px] flex-1 flex-wrap content-center gap-1.5 bg-white p-2 dark:bg-slate-800">
+                {dishes.length === 0 ? (
+                  <span className="self-center px-1 text-xs italic text-slate-400 dark:text-slate-500">
+                    {t('menuResults.emptyTier')}
+                  </span>
+                ) : (
+                  dishes.map((dish, i) => {
+                    const key = `${tier}-${i}`
+                    const isSelected = selected?.key === key
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setSelected(isSelected ? null : { key, dish })}
+                        className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-semibold transition active:scale-[0.97] ${
+                          isSelected
+                            ? 'border-grade-aplus bg-green-50 text-grade-aplus dark:border-green-400 dark:bg-green-900/20 dark:text-green-400'
+                            : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-600 dark:bg-slate-700/50 dark:text-slate-200'
+                        }`}
+                      >
+                        {/* Dishes are still ordered healthiest-first within a tier
+                            (see MenuDish.rank); the position carries that without
+                            numbering every chip. */}
+                        {dish.name}
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {selected ? (
+        // Keyed so each pick remounts the card and opens fresh on its macros
+        // rather than inheriting the previous dish's expanded/collapsed state.
+        <FoodCard key={selected.key} food={selected.dish.nutrition} defaultOpen />
+      ) : (
+        <p className="px-1 text-center text-xs text-slate-500 dark:text-slate-400">{t('menuResults.tapHint')}</p>
+      )}
+
+      {/* Sides, condiments and drinks: shown for reference but deliberately
+          left out of the tiers above, since they aren't alternatives to a
+          main — "sambal vs nasi lemak" isn't a choice anyone is making. */}
+      {addOns?.length > 0 && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {t('menuResults.addOnsTitle')}
+          </h2>
+          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{t('menuResults.addOnsNote')}</p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {addOns.map((dish, i) => {
+              const key = `addon-${i}`
+              const isSelected = selected?.key === key
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelected(isSelected ? null : { key, dish })}
+                  className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-semibold transition active:scale-[0.97] ${
+                    isSelected
+                      ? 'border-grade-aplus bg-green-50 text-grade-aplus dark:border-green-400 dark:bg-green-900/20 dark:text-green-400'
+                      : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-600 dark:bg-slate-700/50 dark:text-slate-300'
+                  }`}
+                >
+                  {dish.name}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )}
 
       <AccordionSection
         title={t('menuResults.howTiersWork.title')}

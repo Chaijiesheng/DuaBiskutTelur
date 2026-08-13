@@ -22,7 +22,7 @@ class PortionRangeTest {
 
     private static IdentifiedFood identified(double grams, double low, double high) {
         return new IdentifiedFood("Nasi lemak", "1 plate", grams, low, high, "coconut rice",
-                200, 4, 30, 6, 1, 1, 300, "grain", "steamed", 0.9);
+                200, 4, 30, 6, 1, 1, 300, "grain", "steamed", 0.9, null);
     }
 
     @Test

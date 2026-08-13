@@ -82,6 +82,14 @@ public final class AppMetrics {
     public static final String OUTCOME_ERROR = "error";
     /** A lookup that matched a food. */
     public static final String OUTCOME_HIT = "hit";
+    /**
+     * A USDA lookup answered from the in-process memo rather than the network.
+     * Counted separately from {@link #OUTCOME_HIT}, and deliberately not timed:
+     * a map hit is sub-microsecond, so folding it into {@link #USDA_LOOKUP}
+     * would drag the latency distribution toward zero and leave it describing
+     * neither the cache nor the network.
+     */
+    public static final String OUTCOME_CACHE_HIT = "cache_hit";
     /** A lookup that ran fine and matched nothing - expected for unusual local dishes. */
     public static final String OUTCOME_MISS = "miss";
     public static final String OUTCOME_NO_FOOD = "no_food";

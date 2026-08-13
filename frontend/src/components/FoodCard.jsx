@@ -41,10 +41,15 @@ function UnsureChip() {
  * that is not on the plate. Shrinking a hallucinated dish toward its 0.25×
  * floor still leaves it counting toward variety and the food-group mix, so a
  * phantom vegetable would keep earning its bonus however small it got.
+ * Pass defaultOpen when the card is already the thing the user just asked to
+ * see (the menu tier list opens one dish at a time), so the macros don't need
+ * a second tap. Only read on mount — remount with a new key to reset it.
  */
-export default function FoodCard({ food, onPortionChange, onRemove, multiplier = 1, busy = false }) {
+export default function FoodCard({
+  food, onPortionChange, onRemove, multiplier = 1, busy = false, defaultOpen = false,
+}) {
   const { t } = useLanguage()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const unsure = typeof food.confidence === 'number' && food.confidence < UNSURE
   const range =
     food.caloriesHigh > food.caloriesLow

@@ -83,9 +83,14 @@ class BarcodeLookupServiceTest {
                 (context, lang) -> { throw new UnsupportedOperationException("Gemini not expected for barcode results"); },
                 props, new ScoringProperties());
         AnalysisService analysisService = new AnalysisService(
-                null, null, null, emptyLocalFoods(), scoringService, feedbackService, null, null, null, props, new ObjectMapper(), new SimpleMeterRegistry());
+                null, null, null, emptyLocalFoods(), emptyDishTable(), scoringService, feedbackService, null, null, null, props, new ObjectMapper(), new SimpleMeterRegistry());
 
         return new BarcodeLookupService(client, scoringService, feedbackService, analysisService);
+    }
+
+    /** Barcode products are packaged goods, never local dishes — keep the table out of it. */
+    private static LocalDishTable emptyDishTable() {
+        return new LocalDishTable(java.util.List.of());
     }
 
     @Test

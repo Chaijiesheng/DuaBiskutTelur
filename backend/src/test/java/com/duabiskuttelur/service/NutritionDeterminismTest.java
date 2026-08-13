@@ -79,7 +79,7 @@ class NutritionDeterminismTest {
                     grams - 10 - drift, grams + 10 + drift, MENU.get(i),
                     150 + drift, 8 + scan, 20 + scan * 2, 6 + scan, 2, 3, 400 + drift * 10,
                     scan % 2 == 0 ? "grain" : "protein",
-                    scan % 2 == 0 ? "deep-fried" : "steamed", 0.9));
+                    scan % 2 == 0 ? "deep-fried" : "steamed", 0.9, IdentifiedFood.KIND_MAIN));
         }
         return foods;
     }
@@ -108,7 +108,8 @@ class NutritionDeterminismTest {
         NutritionCacheService cache = new NutritionCacheService(
                 Mockito.mock(NutritionCacheRepository.class), props, new SimpleMeterRegistry());
         AnalysisService analysis = new AnalysisService(
-                vision, new UsdaClient(new AppProperties(), new SimpleMeterRegistry()), cache, emptyLocalFoods(), scoring,
+                vision, new UsdaClient(new AppProperties(), new SimpleMeterRegistry()), cache, emptyLocalFoods(),
+                new LocalDishTable(java.util.List.of()), scoring,
                 null, null, null, null, props, new ObjectMapper(), new SimpleMeterRegistry());
         MenuRankingService menu = new MenuRankingService(
                 vision, scoring, analysis, null, null, props, new ObjectMapper());
@@ -162,7 +163,7 @@ class NutritionDeterminismTest {
                     r.usdaSearchTerm(), r.fallbackCaloriesPer100g(), r.fallbackProteinPer100g(),
                     r.fallbackCarbsPer100g(), r.fallbackFatPer100g(), r.fallbackFiberPer100g(),
                     r.fallbackSugarPer100g(), r.fallbackSodiumPer100g(), r.foodGroup(),
-                    r.cookingMethod(), r.confidence()));
+                    r.cookingMethod(), r.confidence(), null));
         }
         return pinned;
     }

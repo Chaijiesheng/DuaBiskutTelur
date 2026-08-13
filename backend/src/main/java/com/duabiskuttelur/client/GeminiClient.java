@@ -24,6 +24,7 @@ import java.io.InterruptedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -156,9 +157,17 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
             already been served. Identify every distinct dish or drink listed — do not invent dishes \
             that aren't printed, and do not skip a dish just because its price is illegible. If the same \
             dish name repeats in multiple languages on one line (e.g. "炒粿条 / Char Kway Teow"), treat it \
-            as ONE entry, not two. Ignore section headers, restaurant name/address, opening hours, and \
-            other non-food text. If a price is legibly printed next to a dish, fold it into that dish's \
-            "name" field as a trailing parenthetical (e.g. "Nasi Lemak (RM8.50)").
+            as ONE entry, not two. Ignore the restaurant name/address, opening hours, and other non-food \
+            text. If a price is legibly printed next to a dish, fold it into that dish's "name" field as \
+            a trailing parenthetical (e.g. "Nasi Lemak (RM8.50)").
+
+            Use the menu's own section headings to classify each item's "kind":
+            - "addon" — extras, sides and condiments sold to accompany something else, typically under a \
+            heading like "Add On", "Extra", "Tambah" or "Side", and typically cheap (plain rice, a fried \
+            egg, sambal, kaya, butter, an extra piece of chicken).
+            - "drink" — anything you drink: coffee, tea, juice, soft drinks, water.
+            - "main" — everything else, i.e. a dish someone would order as their meal.
+            When a section heading is unclear, judge by whether the item is a meal in its own right.
 
             %s
 
@@ -552,10 +561,23 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                                     String callType, RestClient client) {
         Instant deadline = Instant.now().plusMillis(budgetMs);
         boolean firstAttempt = true;
+        // A model that timed out or returned 5xx is written off for the rest of
+        // THIS call: waiting doesn't un-hang it, and re-dialling it with every
+        // remaining key just spends the budget discovering the same thing. It
+        // makes the wall-clock ceiling go further rather than competing with it.
+        Set<String> deadModels = new HashSet<>();
+        // Which of those died by timing out rather than refusing. Writing a model
+        // off early is right, but it must not blur the two failures the chain
+        // metric exists to separate: a provider that is slow and one that is
+        // saying no both surface as a 503, and they need different responses.
+        Set<String> timedOutModels = new HashSet<>();
         for (int round = 0; ; round++) {
             for (String model : models) {
+                if (deadModels.contains(model)) {
+                    continue;
+                }
                 for (String key : keyPool.keys()) {
-                    if (keyPool.isCoolingDown(key)) {
+                    if (keyPool.isCoolingDown(key, model)) {
                         continue;
                     }
                     if (!canStartAttempt(deadline, firstAttempt)) {
@@ -571,12 +593,13 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                         recordCall(call, model, callType, httpOutcome(e));
                         if (e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
                             Duration cooldown = retryAfter(e).orElse(DEFAULT_COOLDOWN);
-                            keyPool.markRateLimited(key, cooldown);
-                            log.info("Gemini 429 on {} for {}; cooling down {}s, trying next key",
+                            keyPool.markRateLimited(key, model, cooldown);
+                            log.info("Gemini 429 on {} for {}; cooling that key down {}s for this model, trying next key",
                                     model, maskedKey(key), cooldown.toSeconds());
                         } else if (e.getStatusCode().is5xxServerError()) {
                             log.warn("Gemini {} on model {} (server-side overload/outage); trying next fallback model",
                                     e.getStatusCode().value(), model);
+                            deadModels.add(model);
                             break; // next model — this failure isn't key-related
                         } else {
                             throw e;
@@ -592,8 +615,10 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                         recordCall(call, model, callType, AppMetrics.OUTCOME_TIMEOUT);
                         // Connect/read timeout — an overloaded model that hangs is
                         // the same situation as an explicit 503: try the next model.
+                        timedOutModels.add(model);
                         log.warn("Gemini I/O timeout on model {} ({}); trying next fallback model",
                                 model, e.getMessage());
+                        deadModels.add(model);
                         break;
                     } catch (RestClientException e) {
                         recordCall(call, model, callType,
@@ -603,15 +628,24 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                         // supertype rather than ResourceAccessException — same
                         // "give up on this model" situation as the branch above.
                         if (isTimeout(e)) {
+                            timedOutModels.add(model);
                             log.warn("Gemini I/O timeout (response read) on model {} ({}); trying next fallback model",
                                     model, e.getMessage());
+                            deadModels.add(model);
                             break;
                         }
                         throw e;
                     }
                 }
             }
-            if (round >= BACKOFF_MS.length) {
+            boolean everyModelDead = deadModels.size() == models.size();
+            if (everyModelDead && timedOutModels.size() == models.size()) {
+                // Every model burned its read timeout: the provider is slow, not
+                // refusing. Give up now rather than sleeping through the backoff
+                // schedule, but report it as the slow case.
+                throw budgetExhausted(models, budgetMs);
+            }
+            if (everyModelDead || round >= BACKOFF_MS.length) {
                 throw new ProviderBusyException(
                         "Gemini unavailable after retries across " + models.size()
                                 + " model(s) and " + keyPool.keys().size() + " key(s)");
@@ -688,6 +722,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
     }
 
     private String callAndExtractText(String model, Map<String, Object> body, String key, RestClient client) {
+        long startedAt = System.nanoTime();
         JsonNode response = client.post()
                 .uri("/v1beta/models/{model}:generateContent", model)
                 .header("x-goog-api-key", key)
@@ -697,6 +732,20 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
         if (response == null) {
             throw new IllegalStateException("Empty response from Gemini API");
         }
+        // Prompt vs output tokens is the difference between "the image is too
+        // big" and "we asked for too many fields" — without it, tuning either
+        // one is guesswork. Images dominate promptTokenCount.
+        JsonNode usage = response.path("usageMetadata");
+        // finishReason is the tell for a response that stopped mid-JSON:
+        // MAX_TOKENS means what came back is a fragment, not an answer. Thinking
+        // models spend part of the same budget before emitting any text, so the
+        // visible output token count alone doesn't reveal how close we came.
+        log.info("Gemini {} answered in {}ms (promptTokens={}, outputTokens={}, thoughtTokens={}, finish={})",
+                model, (System.nanoTime() - startedAt) / 1_000_000,
+                usage.path("promptTokenCount").asInt(-1),
+                usage.path("candidatesTokenCount").asInt(-1),
+                usage.path("thoughtsTokenCount").asInt(-1),
+                response.path("candidates").path(0).path("finishReason").asText("?"));
         String blockReason = response.path("promptFeedback").path("blockReason").asText("");
         if (!blockReason.isEmpty()) {
             throw new IllegalStateException("Gemini blocked the request: " + blockReason);
@@ -738,14 +787,64 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
     /**
      * Defensive JSON extraction: strips markdown fences and any prose around the
      * outermost open/close pair.
+     *
+     * <p>An array that stopped mid-generation (a long menu against the output
+     * token budget) has an opening bracket and no closing one. Rather than lose
+     * the whole scan, the complete elements are salvaged and the array closed —
+     * 40 dishes read off a menu beats an error page because the 41st was cut in
+     * half. Anything with no recoverable element still fails loudly.
      */
     static String extractJson(String text, char open, char close) {
         String cleaned = text.replaceAll("(?s)```(?:json)?", "").trim();
         int start = cleaned.indexOf(open);
         int end = cleaned.lastIndexOf(close);
-        if (start < 0 || end <= start) {
-            throw new IllegalStateException("No JSON payload found in model response");
+        if (start >= 0 && end > start) {
+            return cleaned.substring(start, end + 1);
         }
-        return cleaned.substring(start, end + 1);
+        if (start >= 0 && open == '[') {
+            String salvaged = salvageTruncatedArray(cleaned, start);
+            if (salvaged != null) {
+                log.warn("Model response was cut off mid-array; salvaged the complete entries");
+                return salvaged;
+            }
+        }
+        throw new IllegalStateException("No JSON payload found in model response (length="
+                + cleaned.length() + ", starts with: "
+                + cleaned.substring(0, Math.min(120, cleaned.length())).replace('\n', ' ') + ")");
+    }
+
+    /**
+     * Walks a truncated array and cuts it back to the last element that closed
+     * cleanly. Returns null when not even one element survived.
+     */
+    private static String salvageTruncatedArray(String text, int start) {
+        int depth = 0;
+        int lastCompleteElement = -1;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                inString = !inString;
+            } else if (!inString) {
+                if (c == '[' || c == '{') {
+                    depth++;
+                } else if (c == ']' || c == '}') {
+                    depth--;
+                    // Back to depth 1 means an element of the outer array just closed.
+                    if (depth == 1) {
+                        lastCompleteElement = i;
+                    }
+                }
+            }
+        }
+        return lastCompleteElement < 0 ? null : text.substring(start, lastCompleteElement + 1) + "]";
     }
 }

@@ -12,6 +12,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -36,6 +40,21 @@ public class UsdaClient {
     ) {
     }
 
+    /**
+     * Access-ordered LRU, capped so a long-running instance can't accumulate
+     * unbounded entries from novel search terms. Wrapped for thread safety
+     * because menu scans resolve their dishes concurrently.
+     */
+    private static final int CACHE_MAX_ENTRIES = 500;
+
+    private final Map<String, Optional<NutrientsPer100g>> cache = Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Optional<NutrientsPer100g>> eldest) {
+                    return size() > CACHE_MAX_ENTRIES;
+                }
+            });
+
     private final AppProperties props;
     private final RestClient restClient;
 
@@ -56,10 +75,25 @@ public class UsdaClient {
     /**
      * Search FoodData Central for the term and return per-100g nutrients of the
      * top match. Empty when nothing matched or all retries failed.
+     *
+     * <p>Results are memoized per search term. Menus repeat heavily — both
+     * within one scan and across scans of similar restaurants — and a dish's
+     * reference nutrition doesn't change, so the second lookup of "teh tarik"
+     * costs nothing. Genuine "no match" answers are cached too (they cost a
+     * full round trip to discover, and a term USDA doesn't know today it won't
+     * know in five minutes either); transient failures are not.
      */
     public Optional<NutrientsPer100g> lookup(String searchTerm) {
         if (!props.hasUsdaKey()) {
             return Optional.empty();
+        }
+        String cacheKey = searchTerm == null ? "" : searchTerm.trim().toLowerCase(Locale.ROOT);
+        Optional<NutrientsPer100g> cached = cache.get(cacheKey);
+        if (cached != null) {
+            // Counted, never timed — see AppMetrics.OUTCOME_CACHE_HIT.
+            meters.counter(AppMetrics.USDA_LOOKUP + ".cache",
+                    AppMetrics.TAG_OUTCOME, AppMetrics.OUTCOME_CACHE_HIT).increment();
+            return cached;
         }
         Timer.Sample sample = Timer.start(meters);
         Outcome outcome = search(searchTerm);
@@ -67,7 +101,9 @@ public class UsdaClient {
                 .description("One FoodData Central lookup")
                 .tag(AppMetrics.TAG_OUTCOME, outcome.label())
                 .register(meters));
-        return outcome.value();
+        if (outcome.cacheable()) {
+            cache.put(cacheKey, outcome.value());
+        }        return outcome.value();
     }
 
     /**
@@ -90,10 +126,21 @@ public class UsdaClient {
         static Outcome empty(String label) {
             return new Outcome(Optional.empty(), label);
         }
+
+        /**
+         * Whether this result may be memoised. Derived from the label rather
+         * than stored beside it, because they are the same fact: a hit and a
+         * genuine miss are answers and stay true, while an error is a statement
+         * about the network at one moment. Caching the latter would let one
+         * blip pin a food to "estimated" for the life of the process.
+         */
+        boolean cacheable() {
+            return !AppMetrics.OUTCOME_ERROR.equals(label)
+                    && !AppMetrics.OUTCOME_CLIENT_ERROR.equals(label);
+        }
     }
 
-    private Outcome search(String searchTerm) {
-        int attempts = props.getUsdaRetries() + 1;
+    private Outcome search(String searchTerm) {        int attempts = props.getUsdaRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             try {
                 JsonNode response = restClient.get()
@@ -131,16 +178,14 @@ public class UsdaClient {
                 // way every time — retrying just spends the caller's latency
                 // budget to be told no again.
                 log.warn("USDA rejected the lookup for '{}': {}", searchTerm, e.getStatusCode());
-                return Outcome.empty(AppMetrics.OUTCOME_CLIENT_ERROR);
-            } catch (Exception e) {
+                return Outcome.empty(AppMetrics.OUTCOME_CLIENT_ERROR);            } catch (Exception e) {
                 log.warn("USDA lookup failed for '{}' (attempt {}/{}): {}", searchTerm, attempt, attempts, e.getMessage());
                 if (attempt < attempts) {
                     sleepBriefly(attempt);
                 }
             }
         }
-        return Outcome.empty(AppMetrics.OUTCOME_ERROR);
-    }
+        return Outcome.empty(AppMetrics.OUTCOME_ERROR);    }
 
     private NutrientsPer100g parseFood(JsonNode food) {
         double calories = 0, protein = 0, carbs = 0, fat = 0, fiber = 0, sugar = 0, sodium = 0;

@@ -52,6 +52,7 @@ public class AnalysisService {
     private final VisionAnalysisClient visionClient;
     private final UsdaClient usdaClient;
     private final NutritionCacheService nutritionCache;
+    private final LocalDishTable localDishTable;
     private final ScoringService scoringService;
     private final FeedbackService feedbackService;
     private final DashboardService dashboardService;
@@ -64,6 +65,7 @@ public class AnalysisService {
 
     public AnalysisService(VisionAnalysisClient visionClient, UsdaClient usdaClient,
                            NutritionCacheService nutritionCache, LocalFoodService localFoodService,
+                           LocalDishTable localDishTable,
                            ScoringService scoringService, FeedbackService feedbackService,
                            DashboardService dashboardService, ThumbnailService thumbnailService,
                            MealAnalysisRepository repository, AppProperties props, ObjectMapper mapper,
@@ -72,6 +74,7 @@ public class AnalysisService {
         this.usdaClient = usdaClient;
         this.nutritionCache = nutritionCache;
         this.localFoodService = localFoodService;
+        this.localDishTable = localDishTable;
         this.scoringService = scoringService;
         this.feedbackService = feedbackService;
         this.dashboardService = dashboardService;
@@ -158,9 +161,15 @@ public class AnalysisService {
     }
 
     /**
-     * Cached USDA lookup per identified food, falling back to the model's per-100g
-     * estimate when it fails, scaled to this scan's own portion. Package-visible
-     * so MenuRankingService can reuse the same resolution logic per dish.
+     * USDA lookup per identified food, falling back to the model's per-100g
+     * estimate when the lookup misses or comes back with something that isn't
+     * credible for this dish (see NutritionValidator — USDA's fuzzy search will
+     * happily answer about a composite restaurant dish with whatever generic
+     * row was closest).
+     *
+     * <p>Package-visible so MenuRankingService can reuse the same logic per dish,
+     * and pinned by NutritionCacheService so a repeat scan of the same dish
+     * replays this answer instead of re-rolling it.
      */
     FoodItem resolveNutrition(IdentifiedFood cf) {
         return resolveNutrition(cf, false);
@@ -218,36 +227,61 @@ public class AnalysisService {
         String searchTerm = cf.usdaSearchTerm() != null && !cf.usdaSearchTerm().isBlank()
                 ? cf.usdaSearchTerm() : cf.name();
 
-        // Local first, and by the dish's own name rather than by usdaSearchTerm:
-        // that field exists to translate a local dish into the nearest generic
-        // USDA has ("coconut rice" for nasi lemak), which is precisely the
-        // approximation this table replaces. Searching the curated database for
-        // the generic would throw away its whole reason for existing.
-        Optional<NutritionCacheService.Resolved> local = localFoodService.lookup(cf.name());
-        if (local.isPresent()) {
-            countSource(LocalFoodService.SOURCE);
-            return withModelFallbacks(local.get(), cf);
+        Optional<UsdaClient.NutrientsPer100g> match = usdaClient.lookup(searchTerm)
+                .filter(n -> n.calories() > 0);
+        if (match.isPresent()) {
+            Optional<String> rejection = NutritionValidator.rejectionReason(match.get(), cf);
+            if (rejection.isEmpty()) {
+                countSource("usda");
+                return resolvedFrom(match.get(), cf, "usda", cf.foodGroup(), cf.cookingMethod());
+            }
+            log.info("Rejected USDA match '{}' for '{}': {}", match.get().matchedDescription(),
+                    cf.name(), rejection.get());
+        } else {
+            log.info("No USDA match for '{}'", cf.name());
         }
 
-        return usdaClient.lookup(searchTerm)
-                .filter(n -> n.calories() > 0)
-                .map(n -> { countSource("usda"); return new NutritionCacheService.Resolved(
-                        n.calories(), n.protein(), n.carbs(), n.fat(), n.fiber(), n.sugar(), n.sodium(),
-                        gramsOf(cf), cf.lowGrams(), cf.highGrams(), cf.estimatedPortion(), "usda",
-                        cf.foodGroup(), cf.cookingMethod(), clampConfidence(cf.confidence())); })
-                .orElseGet(() -> {
-                    // The review's first question - what fraction of analyses fall
-                    // back to a model estimate - is the ratio of these two counters.
-                    // This line used to be the only signal the AI layer produced.
-                    countSource("estimated");
-                    log.info("Using model fallback estimate for '{}'", cf.name());
-                    return new NutritionCacheService.Resolved(
-                            cf.fallbackCaloriesPer100g(), cf.fallbackProteinPer100g(), cf.fallbackCarbsPer100g(),
-                            cf.fallbackFatPer100g(), cf.fallbackFiberPer100g(), cf.fallbackSugarPer100g(),
-                            cf.fallbackSodiumPer100g(),
-                            gramsOf(cf), cf.lowGrams(), cf.highGrams(), cf.estimatedPortion(), "estimated",
-                            cf.foodGroup(), cf.cookingMethod(), clampConfidence(cf.confidence()));
-                });
+        // Only now. The obvious design was to answer local dishes from the
+        // table before USDA ever ran, and on a 30-dish Malaysian benchmark that
+        // was measurably worse — rho 0.665 against 0.790 for this ordering, and
+        // production then measured the first-resort version worse still (0.484
+        // against 0.596). A curated row is one generic figure for a dish every
+        // stall cooks differently, so it loses to a specific match that passed
+        // validation and only wins where that path has already failed.
+        Optional<LocalDishTable.Entry> local = props.isLocalDishTableEnabled()
+                ? localDishTable.lookup(cf.name())
+                : Optional.empty();
+        if (local.isPresent()) {
+            LocalDishTable.Entry e = local.get();
+            log.info("Using the local dish table for '{}' ('{}')", cf.name(), e.canonical());
+            countSource("local");
+            // The curated group and fried flag are properties of the dish rather
+            // than of the lookup, so they come along. The table stores a boolean
+            // where the pipeline carries a method; deep-fried is the honest
+            // widening of "fried" for scoring purposes.
+            return resolvedFrom(e.nutrients(), cf, "local", e.foodGroup(),
+                    e.fried() ? "deep-fried" : cf.cookingMethod());
+        }
+
+        // The review's first question — what fraction of analyses fall back to a
+        // model estimate — is the ratio of these counters.
+        countSource("estimated");
+        log.info("Using model fallback estimate for '{}'", cf.name());
+        return new NutritionCacheService.Resolved(
+                cf.fallbackCaloriesPer100g(), cf.fallbackProteinPer100g(), cf.fallbackCarbsPer100g(),
+                cf.fallbackFatPer100g(), cf.fallbackFiberPer100g(), cf.fallbackSugarPer100g(),
+                cf.fallbackSodiumPer100g(),
+                gramsOf(cf), cf.lowGrams(), cf.highGrams(), cf.estimatedPortion(), "estimated",
+                cf.foodGroup(), cf.cookingMethod(), clampConfidence(cf.confidence()));
+    }
+
+    /** One shape for every resolved source, so the cache pins them identically. */
+    private NutritionCacheService.Resolved resolvedFrom(UsdaClient.NutrientsPer100g n, IdentifiedFood cf,
+                                                        String source, String foodGroup, String cookingMethod) {
+        return new NutritionCacheService.Resolved(
+                n.calories(), n.protein(), n.carbs(), n.fat(), n.fiber(), n.sugar(), n.sodium(),
+                gramsOf(cf), cf.lowGrams(), cf.highGrams(), cf.estimatedPortion(), source,
+                foodGroup, cookingMethod, clampConfidence(cf.confidence()));
     }
 
     private void countSource(String source) {

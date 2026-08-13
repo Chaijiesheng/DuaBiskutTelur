@@ -108,7 +108,7 @@ class AnalyzeEndpointTest {
 
     private static IdentifiedFood identifiedFood(String name, String group, boolean fried, double grams) {
         return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams, grams * 0.8, grams * 1.2,
-                name, 150, 10, 15, 6, 1.5, 2, 300, group, fried ? "deep-fried" : "steamed", 0.9);
+                name, 150, 10, 15, 6, 1.5, 2, 300, group, fried ? "deep-fried" : "steamed", 0.9, null);
     }
 
     @Test

@@ -14,8 +14,23 @@ export const TIER_LABELS = {
   LAWANLE: '拉完了',
 }
 
-// Per-theme hex, same "keep in sync with tailwind.config.js tier.*" convention
-// GradeReveal.jsx's GRADE_COLORS uses for the grade.* tokens.
+// Solid fill behind the tier label cell in the tier-list table, always paired
+// with white text. Deliberately NOT theme-switched: this reproduces the
+// reference tier-list graphic, where the colored cells are the same printed
+// blocks whatever surrounds them, and every value here clears 4.5:1 on white.
+// The dark values in TIER_COLORS below are text colors — far too light to sit
+// under white text.
+export const TIER_CELL_BG = {
+  HANG: '#b91c1c',
+  TOP: '#b45309',
+  RENSHANGREN: '#a16207',
+  NPC: '#4b5563',
+  LAWANLE: '#374151',
+}
+
+// Per-theme hex for tier text on a normal card background, same "keep in sync
+// with tailwind.config.js tier.*" convention GradeReveal.jsx's GRADE_COLORS
+// uses for the grade.* tokens.
 export const TIER_COLORS = {
   light: {
     HANG: '#b91c1c',

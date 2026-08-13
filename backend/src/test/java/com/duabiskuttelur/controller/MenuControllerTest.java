@@ -77,7 +77,7 @@ class MenuControllerTest {
                                         double caloriesPer100g, double sodiumPer100g, double grams) {
         return new IdentifiedFood(name, "1 serving / ~" + (int) grams + "g", grams, grams * 0.8, grams * 1.2,
                 name, caloriesPer100g, 8, 15, 6, 1.5, 2, sodiumPer100g, group,
-                fried ? "deep-fried" : "steamed", 0.9);
+                fried ? "deep-fried" : "steamed", 0.9, IdentifiedFood.KIND_MAIN);
     }
 
     private static List<IdentifiedFood> spreadAcrossTiers() {

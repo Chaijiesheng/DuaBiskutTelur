@@ -39,14 +39,30 @@ public record IdentifiedFood(
         double fallbackSodiumPer100g,
         String foodGroup,
         String cookingMethod,
-        double confidence
+        double confidence,
+        /**
+         * Menu scans only: "main", "addon" or "drink", read off the menu's own
+         * sections. Null for plate photos, which have no such notion — every
+         * caller treats null as a main. Lets menu ranking keep condiments and
+         * teh tarik out of a tier list that's meant to answer "what should I
+         * order", where a spoon of sambal isn't a competing answer.
+         */
+        String kind
 ) {
+    public static final String KIND_MAIN = "main";
+    public static final String KIND_ADDON = "addon";
+    public static final String KIND_DRINK = "drink";
+
     public IdentifiedFood {
         name = UntrustedText.clean(name, UntrustedText.MAX_NAME);
         estimatedPortion = UntrustedText.clean(estimatedPortion, UntrustedText.MAX_PORTION);
         usdaSearchTerm = UntrustedText.clean(usdaSearchTerm, UntrustedText.MAX_SEARCH_TERM);
         foodGroup = FoodTaxonomy.normalizeGroup(foodGroup);
         cookingMethod = FoodTaxonomy.normalizeMethod(cookingMethod);
+        // Same treatment as group and method: kind is free text the model read
+        // off a photo, so it is normalised to the closed vocabulary here rather
+        // than trusted at the point the ranker branches on it.
+        kind = FoodTaxonomy.normalizeKind(kind);
     }
 
     /**
@@ -73,5 +89,14 @@ public record IdentifiedFood(
      */
     public boolean fried() {
         return FoodTaxonomy.isFried(cookingMethod);
+    }
+
+    /** True for anything that isn't a dish you'd order as your meal. */
+    public boolean isSideOrDrink() {
+        // Belt and braces: the model classifies from the menu layout, but a
+        // beverage is a drink whatever section it was printed in.
+        return KIND_ADDON.equals(kind)
+                || KIND_DRINK.equals(kind)
+                || "beverage".equalsIgnoreCase(foodGroup);
     }
 }
