@@ -1,5 +1,6 @@
 package com.duabiskuttelur.service;
 
+import com.duabiskuttelur.model.FoodTaxonomy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -81,6 +82,49 @@ class LocalDishTableTest {
             assertTrue(Math.abs(macroEnergy - n.calories()) / n.calories() < 0.10,
                     "%s: macros imply %.0f kcal against %.0f stated".formatted(dish, macroEnergy, n.calories()));
             assertTrue(n.protein() < 60 && n.carbs() < 90, dish + " should be a served portion, not an ingredient");
+        }
+    }
+
+    /**
+     * Every row's group has to be a real food group, checked across the whole
+     * file rather than for the dishes a test happened to name.
+     *
+     * <p>This exists because {@code kopi o} shipped as {@code other} — a valid
+     * <em>cooking method</em>, not a group. {@link FoodTaxonomy#normalizeGroup}
+     * maps anything unknown to null, and the local rescue passes the curated
+     * group straight through with no model fallback, so the dish silently lost
+     * its group and with it the {@code beverage} check that
+     * {@link com.duabiskuttelur.model.IdentifiedFood#isSideOrDrink()} falls back
+     * on. Nothing failed; a drink just stopped being a drink.
+     */
+    @Test
+    void everyRowsFoodGroupIsARealFoodGroup() {
+        for (LocalDishTable.Entry e : table.allEntries()) {
+            assertTrue(FoodTaxonomy.FOOD_GROUPS.contains(e.foodGroup()),
+                    "'%s' has foodGroup '%s', which is not a food group. Valid: %s"
+                            .formatted(e.canonical(), e.foodGroup(), FoodTaxonomy.FOOD_GROUPS));
+        }
+    }
+
+    /**
+     * Atwater across every row, not just the five dishes named above. Calories
+     * are not an independent measurement — they are protein and carbs at 4 kcal/g
+     * plus fat at 9 — so an energy figure that disagrees with its own macros
+     * means one of the four was transcribed wrong. A wrong number wearing a
+     * curated label is worse than an honest model estimate, because the user
+     * cannot tell it was mistyped and the app is telling them to trust it more.
+     */
+    @Test
+    void everyRowsMacrosReconcileWithItsStatedEnergy() {
+        for (String canonical : new java.util.TreeSet<>(
+                table.allEntries().stream().map(LocalDishTable.Entry::canonical).toList())) {
+            var n = table.lookup(canonical).orElseThrow().nutrients();
+            double macroEnergy = n.protein() * 4 + n.carbs() * 4 + n.fat() * 9;
+            assertTrue(Math.abs(macroEnergy - n.calories()) / n.calories() < 0.10,
+                    "%s: macros imply %.0f kcal against %.0f stated"
+                            .formatted(canonical, macroEnergy, n.calories()));
+            assertTrue(n.fiber() <= n.carbs(), canonical + ": more fibre than carbohydrate");
+            assertTrue(n.sugar() <= n.carbs() + 0.5, canonical + ": more sugar than carbohydrate");
         }
     }
 

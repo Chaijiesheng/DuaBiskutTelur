@@ -86,11 +86,30 @@ the AI vendor can be swapped without touching the service layer.
    profile, and targets.
 4. **Nutrition sources are labeled.** Every item carries `source`, surfaced in
    the UI as a trust signal, in descending order of trust: `local` (the curated
-   Malaysian composition table — the dish itself, with a citation), `barcode`
-   (label data), `usda` (a FoodData Central match, which for a local dish is the
-   nearest generic it could find), `estimated` (vision-model fallback).
-   Resolution goes local → USDA → model. The local table currently ships
-   empty — see Outstanding issues.
+   Malaysian composition table — the dish itself), `barcode` (label data),
+   `usda` (a FoodData Central match, which for a local dish is the nearest
+   generic it could find), `estimated` (vision-model fallback).
+
+   **Resolution order is USDA → `NutritionValidator` → curated dish table →
+   model estimate.** Note this is *not* the badge order above, and the two are
+   answering different questions: the badge says which source a reader should
+   trust once a dish has resolved, the ordering says which source to ask first.
+   Conflating them is what produced the original local-first design.
+
+   **The curated table is a rescue, not a first resort**, and that was settled
+   by measurement rather than argument. Answering a known local dish from the
+   table and never calling USDA was built, measured and reversed: ρ 0.665
+   against an expert ranking of 30 Malaysian dishes, where consulting the table
+   only after a USDA match has failed validation scored ρ 0.790. One curated row
+   has to stand for a dish every stall cooks differently, so it loses to a
+   specific match that passed validation and wins only where that path has
+   already produced something impossible. `LocalDishRescueTest` pins every step
+   of the ordering — USDA asked first, a valid match ending it, the table
+   answering only after a miss or a rejection, the model backstopping both.
+
+   **The table ships gated off** (`app.local-dish-table-enabled: false`) — see
+   Outstanding issues. `docs/menu-ranking-evaluation.md` §10–11 carries the
+   measurements.
 5. **Resolution is pinned per dish** (`NutritionCacheService`, table
    `nutrition_cache`). Resolving a dish is otherwise a lottery — the USDA search
    can return a different top match or time out, and the model's fallback
@@ -377,12 +396,29 @@ documents / issue tracker):
     code in practice. They want tuning against a sample of real photos, and
     that sample is the prerequisite for the low-confidence path being useful
     rather than decorative.
-11. The local food database is **empty**. The mechanism, the trust badge, the
-    plausibility checks and the seed format are all in place; what is missing is
+11. **Two local dish tables exist and neither is delivering the accuracy win.**
+    `LocalDishTable` (CSV, 55 dishes) is the one wired into resolution, as a
+    rescue after a failed USDA lookup — and it **ships gated off**
+    (`app.local-dish-table-enabled: false`), because production measured it
+    *hurting*: ρ 0.484 with the table enabled against 0.596 with it disabled
+    entirely. The cause is identified and is not the table's data. The
+    validator's rules were derived from per-serving pathologies but are applied
+    to per-100g density, so every threshold is wrong by the portion size; it
+    rejects 10–15 of 30 dishes per scan, and the rescue then displaces sound
+    USDA data far more often than the offline study modelled. **Fix the units,
+    re-measure over ≥5 scans, then open the gate** — in that order, and see
+    `docs/menu-ranking-evaluation.md` §11.
+
+    `local_food` + `local_food_alias` (the DB-backed `LocalFoodService`) is the
+    other, and it is **empty and unreferenced**. Its mechanism, trust badge,
+    plausibility checks and seed format are all in place; what is missing is
     ~150 dishes transcribed from MyFCD / Singapore HPB into
-    `R__local_food_seed.sql`. This is the single highest-leverage accuracy work
-    left in the product and it is a data task, not an engineering one. Do not
-    fill it with recalled or generated figures - see the file header.
+    `R__local_food_seed.sql`. Do not fill it with recalled or generated figures
+    — see the file header. Before doing that transcription, decide whether this
+    implementation survives at all or whether the CSV absorbs it, so the work
+    lands once. Curated local composition data remains the single
+    highest-leverage accuracy work left in the product, and it is a data task,
+    not an engineering one.
 12. A dish's *first* portion estimate still pins the portion every later menu
     scan replays (`nutrition_cache.grams`). Portion corrections deliberately do
     not write back to that shared table - see below - so a dish first resolved
@@ -650,11 +686,25 @@ documents / issue tracker):
   model's own estimate. No amount of prompt work moves that: the data is not in
   the source being queried.
 
-  **What is built and tested.** `local_food` + `local_food_alias` (V10),
-  `LocalFoodService`, and resolution order **local -> USDA -> model**. A hit is
-  reported as `source="local"` and shown as the highest trust badge, above USDA -
-  it is the dish itself rather than the closest generic, and it carries a
-  citation. Three design points worth keeping:
+  **Read this section knowing there are now two local implementations, and only
+  one of them is wired in.** What follows describes `LocalFoodService`, the
+  database-backed lookup built first. It is **no longer in the resolution
+  path**: the merge that brought menu ranking in replaced it with
+  `LocalDishTable`, a CSV-backed table of 55 curated dishes
+  (`resources/nutrition/malaysian-dishes.csv`), consulted as a *rescue* after a
+  failed USDA lookup rather than first. `LocalFoodService` and its schema, seed
+  and tests are all still present and still pass; nothing calls them. Retiring
+  them, or seeding the DB table from the CSV and making it the rescue instead,
+  is an open decision — do not delete either until it is made. The ordering
+  itself is design decision #4.
+
+  **What was built and tested, for the retired implementation.** `local_food` +
+  `local_food_alias` (V10), `LocalFoodService`, and resolution order **local ->
+  USDA -> model**. A hit is reported as `source="local"` and shown as the
+  highest trust badge, above USDA - it is the dish itself rather than the
+  closest generic, and it carries a citation. That local-first ordering is the
+  part measurement reversed; the design points below survived it and are worth
+  keeping whichever table ends up in the path:
   - *Aliases get their own indexed table*, not the comma-separated column the
     review sketched. A delimited column cannot be indexed, so matching a Chinese
     dish name against it would scan every row - for every dish of every menu
@@ -666,11 +716,20 @@ documents / issue tracker):
   - *A curated row's typical serving is preserved through the cache.* An earlier
     version of this wiring overwrote it with the scan's grams, which silently
     threw the published serving away for menu scans - the one flow that replays
-    a pinned portion and therefore the one that wanted it. Caught by
-    `LocalFirstResolutionTest`, which fails if it regresses. The photo flow still
+    a pinned portion and therefore the one that wanted it. The photo flow still
     wins on portion (it saw a plate), and borrows only the *relative* width of
     the model's bracket, since the table is certain about composition and says
     nothing about how much is on this particular plate.
+
+    **This one does not carry over as written.** `LocalDishTable`'s CSV holds
+    per-100g composition and nothing else - there is no typical-serving column
+    to preserve - so a rescued dish takes its portion from the scan, and what
+    makes a menu's portion stable across scans is `NutritionCacheService`
+    pinning it, not the table. `LocalDishRescueTest` pins that the rescue
+    supplies composition and never moves a portion, so a serving column cannot
+    be added back without someone deciding on purpose that it may.
+    (`LocalFirstResolutionTest`, named here previously, is the class that
+    became `LocalDishRescueTest`.)
 
   **The table ships EMPTY, and that is the honest state of it.** Rows belong in
   `R__local_food_seed.sql` - a Flyway *repeatable* migration, so curating is a

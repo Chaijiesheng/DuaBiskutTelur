@@ -5,8 +5,15 @@
 # one it still answers — a benchmark of 30 local dishes had 26% of its USDA
 # matches come back arithmetically impossible ("nasi lemak" resolved to plain
 # chicken with 0g carbohydrate; "black pepper chicken chop rice" to the spice
-# itself). This table is consulted first so recognised dishes never reach that
-# lookup, and USDA is left to do what it is actually good at: single ingredients.
+# itself).
+#
+# This table is a RESCUE, not a first resort. USDA is asked first and its answer
+# stands whenever NutritionValidator accepts it; these rows are consulted only
+# where that has already failed. Answering known dishes from here first was
+# built, measured and reversed -- rho 0.665 against 0.790 on a 30-dish expert
+# ranking, because one curated row has to stand for a dish every stall cooks
+# differently, and so loses to a specific match that passed validation. See
+# AnalysisService.lookUpPer100g and docs/menu-ranking-evaluation.md.
 #
 # Values are curated approximations assembled from published Malaysian serving
 # figures and typical stall portions, intended for ranking dishes against one
@@ -14,8 +21,17 @@
 # at 4/4/9 to within a few percent.
 #
 # Format: canonical | aliases (; separated) | kcal | protein | carbs | fat | fibre | sugar | sodium | foodGroup | fried
-# Matching is case-insensitive on the longest alias contained in the dish name,
-# so a more specific row always beats a more general one.
+#
+# foodGroup must be one of FoodTaxonomy.FOOD_GROUPS -- protein, grain, vegetable,
+# fruit, dairy, fat, sweet, beverage. Anything else normalises to null at
+# FoodItem and the dish silently loses its group, so LocalDishTableTest fails the
+# build on an unknown value.
+#
+# Matching is case-insensitive and requires every word of a row's key to appear
+# in the dish name, in any order -- not as a contiguous substring, which is why
+# "Beef Rendang with White Rice" matches the "beef rendang with rice" row. Rows
+# are tried most-words-first, so a more specific row always beats a more general
+# one.
 
 # --- rice ---
 nasi lemak with fried chicken|nasi lemak ayam goreng;nasi lemak fried chicken;nasi lemak special|221|10|22|10.5|1.3|2.5|350|grain|true
@@ -82,4 +98,4 @@ ais kacang|ice kacang;abc;air batu campur|100|1.7|21|1.4|1.4|17|45|fruit|false
 sambal|sambal belacan|150|2|10|11|2|6|900|fat|false
 teh tarik|teh susu;pulled tea|72|2|12|2|0|11|30|dairy|false
 milo ais|iced milo;milo dinosaur|83|2|14|2.2|0.5|13|40|dairy|false
-kopi o|black coffee kopi|30|0.2|7|0|0|7|5|other|false
+kopi o|black coffee kopi|30|0.2|7|0|0|7|5|beverage|false

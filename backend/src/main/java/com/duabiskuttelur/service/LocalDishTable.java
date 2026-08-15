@@ -26,11 +26,23 @@ import java.util.Optional;
  * arithmetically impossible, against 0% of the dishes that fell through to the
  * vision model's own estimate.
  *
- * <p>So recognised local dishes are answered from {@code malaysian-dishes.csv}
- * before USDA is consulted at all, leaving that lookup to handle the single
- * ingredients it is genuinely good at.
+ * <p>So {@code malaysian-dishes.csv} carries curated composition for the dishes
+ * that lookup cannot answer for — but as a <em>rescue</em>, not a first resort.
+ * USDA is asked first and its answer stands whenever {@link NutritionValidator}
+ * accepts it; this table is reached only where that has already failed.
+ * Answering known dishes from here first was the obvious design, and was built,
+ * measured and reversed: rho 0.665 against 0.790 for rescue-only on the 30-dish
+ * benchmark. One curated row has to stand for a dish every stall cooks
+ * differently, so it loses to a specific match that passed validation and wins
+ * only where that path has already produced something impossible.
  *
- * @see NutritionValidator for the guard on everything this table doesn't cover
+ * <p>Currently gated off by {@code app.local-dish-table-enabled} — see
+ * {@code docs/menu-ranking-evaluation.md} §11 and the handover's outstanding
+ * item 11 for what has to be fixed and re-measured before it opens.
+ *
+ * <p>The ordering itself lives in {@code AnalysisService.lookUpPer100g}.
+ *
+ * @see NutritionValidator for the guard that decides when this table is reached
  */
 @Component
 public class LocalDishTable {
@@ -188,5 +200,15 @@ public class LocalDishTable {
     /** Visible for tests: how many aliases are loaded. */
     int size() {
         return entries.size();
+    }
+
+    /**
+     * Visible for tests: every loaded alias, so the shipped file can be checked
+     * as a whole rather than a dish at a time. Spot-checking named dishes cannot
+     * catch a bad value in a row nobody thought to name — which is exactly how
+     * {@code kopi o} sat misclassified.
+     */
+    List<Entry> allEntries() {
+        return entries;
     }
 }
