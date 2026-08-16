@@ -859,6 +859,13 @@ documents / issue tracker):
   - `nutrition.source{source}` is the review's first question as a ratio.
     `nutrition.cache{result}` keeps `memo_hit` and `store_hit` apart, because a
     warm process still reading the table every time is the case worth seeing.
+  - `usda.match.rejected{rule}` names *which* of `NutritionValidator`'s eleven
+    checks turned a match away. This is the number that governs the rest of the
+    path — a rejection falls to the curated dish table, or past it to a model
+    estimate — and production was rejecting 10–15 dishes out of 30 on one menu
+    scan with the reason available only as log text, one dish at a time. There
+    is deliberately no companion "accepted" counter: `nutrition.source{usda}`
+    already is one, so the rejection rate is a ratio of the two.
   - `analysis.duration{outcome}` counts "no food in the photo" as `no_food`, not
     `error` — otherwise there is a permanent floor under the error rate.
   - `gemini.slots.available` is a gauge, so bulkhead pressure is visible

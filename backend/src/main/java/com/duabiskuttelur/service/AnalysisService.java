@@ -230,13 +230,20 @@ public class AnalysisService {
         Optional<UsdaClient.NutrientsPer100g> match = usdaClient.lookup(searchTerm)
                 .filter(n -> n.calories() > 0);
         if (match.isPresent()) {
-            Optional<String> rejection = NutritionValidator.rejectionReason(match.get(), cf);
+            Optional<NutritionValidator.Rejection> rejection =
+                    NutritionValidator.rejectionReason(match.get(), cf);
             if (rejection.isEmpty()) {
                 countSource("usda");
                 return resolvedFrom(match.get(), cf, "usda", cf.foodGroup(), cf.cookingMethod());
             }
+            // Counted by rule, not just logged. How often this fires is what
+            // decides whether the dish table and the model estimate are carrying
+            // a third of every menu or none of it, and the log line could only
+            // ever answer that one dish at a time.
+            meters.counter(AppMetrics.USDA_MATCH_REJECTED,
+                    AppMetrics.TAG_RULE, rejection.get().rule().tag()).increment();
             log.info("Rejected USDA match '{}' for '{}': {}", match.get().matchedDescription(),
-                    cf.name(), rejection.get());
+                    cf.name(), rejection.get().message());
         } else {
             log.info("No USDA match for '{}'", cf.name());
         }

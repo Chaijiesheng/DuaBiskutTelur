@@ -76,50 +76,101 @@ final class NutritionValidator {
             + "pasta|bread|roti|canai|naan|bun|porridge|congee|bubur)\\b",
             java.util.regex.Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Which rule turned a match away.
+     *
+     * <p>Separate from the message because the message interpolates the actual
+     * numbers, and a metric tagged with those would be a new time series per
+     * dish — an unbounded tag is a slow memory leak that also makes the
+     * dashboard useless. These eleven are the whole vocabulary.
+     *
+     * <p>The rejection rate is what sets how often the resolver falls past USDA,
+     * so it decides how much work the curated table and the model estimate are
+     * asked to do. Production rejected 10-15 of 30 dishes on a menu scan and
+     * there was no way to ask which rule was responsible; that is what this is
+     * for. Accepted matches are already counted as
+     * {@link com.duabiskuttelur.config.AppMetrics#NUTRITION_SOURCE} with
+     * {@code source=usda}, so the rejection rate is a ratio of the two and needs
+     * no third counter.
+     */
+    enum Rule {
+        ENERGY_DENSITY,
+        IMPOSSIBLE_FIBER,
+        NEGATIVE_VALUES,
+        MACROS_UNRECONCILED,
+        PROTEIN_DENSITY,
+        CARB_DENSITY,
+        FIBER_VS_CARBS,
+        INCOMPLETE_ROW,
+        STARCH_WITHOUT_CARBS,
+        CALORIE_DISAGREEMENT,
+        FIBER_DISAGREEMENT;
+
+        /** The metric tag value: lowercase, stable, safe to build a dashboard on. */
+        String tag() {
+            return name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
+    /** Why a match was turned away: the rule for counting, the text for reading. */
+    record Rejection(Rule rule, String message) {
+    }
+
     private NutritionValidator() {
+    }
+
+    private static Optional<Rejection> reject(Rule rule, String message) {
+        return Optional.of(new Rejection(rule, message));
     }
 
     /**
      * @return why this match shouldn't be trusted, or empty when it's usable.
-     *         The text is logged, so it names the actual numbers.
+     *         The message names the actual numbers and is logged; the
+     *         {@link Rule} is the closed-vocabulary version for metrics.
      */
-    static Optional<String> rejectionReason(NutrientsPer100g match, IdentifiedFood modelEstimate) {
+    static Optional<Rejection> rejectionReason(NutrientsPer100g match, IdentifiedFood modelEstimate) {
         if (match.calories() < MIN_KCAL_PER_100G || match.calories() > MAX_KCAL_PER_100G) {
-            return Optional.of("implausible energy density: %.0f kcal/100g".formatted(match.calories()));
+            return reject(Rule.ENERGY_DENSITY,
+                    "implausible energy density: %.0f kcal/100g".formatted(match.calories()));
         }
         if (match.fiber() > MAX_FIBER_PER_100G) {
-            return Optional.of("impossible fibre: %.1fg/100g".formatted(match.fiber()));
+            return reject(Rule.IMPOSSIBLE_FIBER, "impossible fibre: %.1fg/100g".formatted(match.fiber()));
         }
         if (match.protein() < 0 || match.carbs() < 0 || match.fat() < 0 || match.fiber() < 0) {
-            return Optional.of("negative nutrient values");
+            return reject(Rule.NEGATIVE_VALUES, "negative nutrient values");
         }
         double macroEnergy = match.protein() * 4 + match.carbs() * 4 + match.fat() * 9;
         if (macroEnergy > match.calories() * MAX_MACRO_ENERGY_RATIO) {
-            return Optional.of("macros don't reconcile: %.0f kcal of protein/carbs/fat against %.0f kcal stated"
-                    .formatted(macroEnergy, match.calories()));
+            return reject(Rule.MACROS_UNRECONCILED,
+                    "macros don't reconcile: %.0f kcal of protein/carbs/fat against %.0f kcal stated"
+                            .formatted(macroEnergy, match.calories()));
         }
         if (match.protein() > MAX_PROTEIN_PER_100G) {
-            return Optional.of("implausible protein: %.1fg/100g".formatted(match.protein()));
+            return reject(Rule.PROTEIN_DENSITY, "implausible protein: %.1fg/100g".formatted(match.protein()));
         }
         if (match.carbs() > MAX_CARBS_PER_100G) {
-            return Optional.of("implausible carbohydrate: %.1fg/100g — reads as a dry ingredient, not a served dish"
-                    .formatted(match.carbs()));
+            return reject(Rule.CARB_DENSITY,
+                    "implausible carbohydrate: %.1fg/100g — reads as a dry ingredient, not a served dish"
+                            .formatted(match.carbs()));
         }
         if (match.carbs() > 0 && match.fiber() > match.carbs() * MAX_FIBER_SHARE_OF_CARBS) {
-            return Optional.of("%.1fg fibre against %.1fg carbohydrate — too bran-like for this dish"
-                    .formatted(match.fiber(), match.carbs()));
+            return reject(Rule.FIBER_VS_CARBS,
+                    "%.1fg fibre against %.1fg carbohydrate — too bran-like for this dish"
+                            .formatted(match.fiber(), match.carbs()));
         }
         // Both exactly zero alongside real carbohydrate is the signature of a
         // partially-populated USDA row rather than a genuine measurement, and
         // it silently hands the dish a clean sheet on the sugar penalty.
         if (match.carbs() > 0 && match.fiber() == 0 && match.sugar() == 0) {
-            return Optional.of("fibre and sugar both exactly zero against %.1fg carbohydrate — incomplete row"
-                    .formatted(match.carbs()));
+            return reject(Rule.INCOMPLETE_ROW,
+                    "fibre and sugar both exactly zero against %.1fg carbohydrate — incomplete row"
+                            .formatted(match.carbs()));
         }
         if (STARCH_DISH.matcher(modelEstimate.name()).find()
                 && match.carbs() < MIN_CARBS_FOR_STARCH_DISH_PER_100G) {
-            return Optional.of("only %.1fg carbohydrate/100g for a dish named as a rice, noodle or bread"
-                    .formatted(match.carbs()));
+            return reject(Rule.STARCH_WITHOUT_CARBS,
+                    "only %.1fg carbohydrate/100g for a dish named as a rice, noodle or bread"
+                            .formatted(match.carbs()));
         }
 
         // The model didn't venture an estimate, so there's nothing to compare
@@ -131,11 +182,12 @@ final class NutritionValidator {
 
         double ratio = Math.max(match.calories() / estimatedCalories, estimatedCalories / match.calories());
         if (ratio > MAX_CALORIE_DISAGREEMENT) {
-            return Optional.of("%.0f kcal/100g against the model's %.0f — %.1fx apart, likely a different food"
-                    .formatted(match.calories(), estimatedCalories, ratio));
+            return reject(Rule.CALORIE_DISAGREEMENT,
+                    "%.0f kcal/100g against the model's %.0f — %.1fx apart, likely a different food"
+                            .formatted(match.calories(), estimatedCalories, ratio));
         }
         if (match.fiber() > modelEstimate.fallbackFiberPer100g() + MAX_FIBER_EXCESS_PER_100G) {
-            return Optional.of("%.1fg fibre/100g against the model's %.1fg"
+            return reject(Rule.FIBER_DISAGREEMENT, "%.1fg fibre/100g against the model's %.1fg"
                     .formatted(match.fiber(), modelEstimate.fallbackFiberPer100g()));
         }
         return Optional.empty();

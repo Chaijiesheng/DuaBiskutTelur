@@ -41,6 +41,23 @@ public final class AppMetrics {
     public static final String USDA_LOOKUP = "usda.lookup";
 
     /**
+     * A USDA match that came back and was thrown away as not credible for the
+     * dish. Tags: {@link #TAG_RULE}, naming which check caught it.
+     *
+     * <p>This is the number that governs how much work everything downstream is
+     * asked to do: a rejected match falls to the curated dish table, or past it
+     * to the model's own estimate. Production was rejecting 10-15 dishes out of
+     * 30 on a menu scan with no way to ask which rule was responsible — the
+     * reason existed only as log text, which is exactly the situation the rest
+     * of this class was written to end.
+     *
+     * <p>No companion "accepted" counter: accepted matches already increment
+     * {@link #NUTRITION_SOURCE} with {@code source=usda}, so the rejection rate
+     * is a ratio of the two.
+     */
+    public static final String USDA_MATCH_REJECTED = "usda.match.rejected";
+
+    /**
      * Curated local-database lookups. Tags: {@link #TAG_OUTCOME} (hit|miss).
      * The hit rate <em>is</em> the coverage of the seeded data, which is the
      * number that says whether curating more dishes is still worth doing.
@@ -66,6 +83,8 @@ public final class AppMetrics {
     public static final String TAG_OUTCOME = "outcome";
     public static final String TAG_RESULT = "result";
     public static final String TAG_SOURCE = "source";
+    /** Which validation rule rejected a USDA match — see NutritionValidator.Rule. */
+    public static final String TAG_RULE = "rule";
 
     public static final String OUTCOME_SUCCESS = "success";
     public static final String OUTCOME_RATE_LIMITED = "rate_limited";
