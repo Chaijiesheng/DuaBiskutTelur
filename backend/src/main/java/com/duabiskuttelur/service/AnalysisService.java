@@ -16,6 +16,7 @@ import com.duabiskuttelur.persistence.UserEntity;
 import com.duabiskuttelur.service.ScoringService.ScoreResult;
 import com.duabiskuttelur.config.AppMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -27,8 +28,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -63,6 +67,29 @@ public class AnalysisService {
     private final LocalFoodService localFoodService;
     private final MeterRegistry meters;
 
+    /**
+     * Every rejection rule and every nutrition source, registered up front so
+     * each reads 0.0 from boot rather than springing into existence on its first
+     * increment.
+     *
+     * <p>Micrometer creates a counter when it is first touched, which means an
+     * absent series and a series that has genuinely never fired look identical —
+     * "no rule has rejected anything" is indistinguishable from "the
+     * instrumentation was never wired". That is the exact failure this metric
+     * was added to end, so it should not be reproduced by the metric itself.
+     *
+     * <p>Both families are registered together deliberately: the rejection rate
+     * is rejections over rejections-plus-{@code source=usda}, so a dashboard
+     * needs both halves present to compute anything. Registering only the rules
+     * would leave the ratio undefined until the first successful lookup.
+     */
+    private final Map<NutritionValidator.Rule, Counter> rejectionCounters =
+            new EnumMap<>(NutritionValidator.Rule.class);
+    private final Map<String, Counter> sourceCounters = new HashMap<>();
+
+    /** The closed set of values {@link AppMetrics#NUTRITION_SOURCE} is tagged with. */
+    private static final List<String> NUTRITION_SOURCES = List.of("usda", "local", "estimated");
+
     public AnalysisService(VisionAnalysisClient visionClient, UsdaClient usdaClient,
                            NutritionCacheService nutritionCache, LocalFoodService localFoodService,
                            LocalDishTable localDishTable,
@@ -83,6 +110,19 @@ public class AnalysisService {
         this.props = props;
         this.mapper = mapper;
         this.meters = meters;
+
+        for (NutritionValidator.Rule rule : NutritionValidator.Rule.values()) {
+            rejectionCounters.put(rule, Counter.builder(AppMetrics.USDA_MATCH_REJECTED)
+                    .description("USDA matches rejected as not credible for the dish, by rule")
+                    .tag(AppMetrics.TAG_RULE, rule.tag())
+                    .register(meters));
+        }
+        for (String source : NUTRITION_SOURCES) {
+            sourceCounters.put(source, Counter.builder(AppMetrics.NUTRITION_SOURCE)
+                    .description("Where a dish's nutrition came from")
+                    .tag(AppMetrics.TAG_SOURCE, source)
+                    .register(meters));
+        }
     }
 
     public AnalysisResponse analyze(byte[] imageBytes, String mediaType, UserEntity user, String lang) {
@@ -240,8 +280,7 @@ public class AnalysisService {
             // decides whether the dish table and the model estimate are carrying
             // a third of every menu or none of it, and the log line could only
             // ever answer that one dish at a time.
-            meters.counter(AppMetrics.USDA_MATCH_REJECTED,
-                    AppMetrics.TAG_RULE, rejection.get().rule().tag()).increment();
+            rejectionCounters.get(rejection.get().rule()).increment();
             log.info("Rejected USDA match '{}' for '{}': {}", match.get().matchedDescription(),
                     cf.name(), rejection.get().message());
         } else {
@@ -292,7 +331,15 @@ public class AnalysisService {
     }
 
     private void countSource(String source) {
-        meters.counter(AppMetrics.NUTRITION_SOURCE, AppMetrics.TAG_SOURCE, source).increment();
+        // Pre-registered in the constructor, so a source that has not been used
+        // yet reports 0.0 rather than being absent from the scrape entirely.
+        Counter counter = sourceCounters.get(source);
+        if (counter == null) {
+            // Unreachable for the three call sites above; guards against a new
+            // source being added here and silently missing from NUTRITION_SOURCES.
+            throw new IllegalArgumentException("unregistered nutrition source: " + source);
+        }
+        counter.increment();
     }
 
     /**

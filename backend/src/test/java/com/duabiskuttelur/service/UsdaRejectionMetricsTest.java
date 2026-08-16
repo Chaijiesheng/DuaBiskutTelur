@@ -64,6 +64,16 @@ class UsdaRejectionMetricsTest {
                         .tag(AppMetrics.TAG_RULE, rule.tag()).counter().count();
     }
 
+    /**
+     * Every rule's series summed. Since the counters are registered at startup,
+     * "nothing was rejected" is a total of zero — not an absent series, which is
+     * what it used to be and is no longer a safe thing to assert.
+     */
+    private double totalRejections() {
+        return meters.find(AppMetrics.USDA_MATCH_REJECTED).counters()
+                .stream().mapToDouble(c -> c.count()).sum();
+    }
+
     private double accepted() {
         var counter = meters.find(AppMetrics.NUTRITION_SOURCE).tag(AppMetrics.TAG_SOURCE, "usda").counter();
         return counter == null ? 0 : counter.count();
@@ -114,8 +124,7 @@ class UsdaRejectionMetricsTest {
         service().resolveNutrition(nasiLemak());
 
         assertEquals(1, accepted());
-        assertTrue(meters.find(AppMetrics.USDA_MATCH_REJECTED).counters().isEmpty(),
-                "an accepted match must not appear in the rejection series");
+        assertEquals(0, totalRejections(), "an accepted match must not count as a rejection");
     }
 
     /**
@@ -129,8 +138,52 @@ class UsdaRejectionMetricsTest {
 
         service().resolveNutrition(nasiLemak());
 
-        assertTrue(meters.find(AppMetrics.USDA_MATCH_REJECTED).counters().isEmpty(),
-                "a miss is not a rejected match");
+        assertEquals(0, totalRejections(), "a miss is not a rejected match");
+    }
+
+    /**
+     * Every rule has a series from startup, reading zero, before a single dish
+     * has been resolved.
+     *
+     * <p>Micrometer registers a counter when it is first incremented, so without
+     * this an unfired rule is simply absent from the scrape — and "no rule has
+     * rejected anything" then looks exactly like "the counter was never wired".
+     * That ambiguity is the whole reason this metric exists, so the metric must
+     * not reproduce it. Deployed lazily once: {@code usda_match_rejected_total}
+     * was missing from {@code /actuator/prometheus} entirely until the first
+     * rejection, while {@code nutrition_cache_total} sat there at 0.0 because
+     * NutritionCacheService registers eagerly.
+     */
+    @Test
+    void everyRuleHasASeriesFromStartupReadingZero() {
+        service();
+
+        for (NutritionValidator.Rule rule : NutritionValidator.Rule.values()) {
+            var counter = meters.find(AppMetrics.USDA_MATCH_REJECTED)
+                    .tag(AppMetrics.TAG_RULE, rule.tag()).counter();
+            assertTrue(counter != null, "no series registered for " + rule);
+            assertEquals(0, counter.count(), rule + " should start at zero");
+        }
+        assertEquals(NutritionValidator.Rule.values().length,
+                meters.find(AppMetrics.USDA_MATCH_REJECTED).counters().size());
+    }
+
+    /**
+     * The other half of the ratio. Rejection rate is rejections over
+     * rejections-plus-{@code source=usda}, so registering only the rules would
+     * leave the denominator missing until the first lookup succeeded, and the
+     * rate undefined exactly when someone is trying to read it.
+     */
+    @Test
+    void everyNutritionSourceAlsoHasASeriesFromStartup() {
+        service();
+
+        for (String source : List.of("usda", "local", "estimated")) {
+            var counter = meters.find(AppMetrics.NUTRITION_SOURCE)
+                    .tag(AppMetrics.TAG_SOURCE, source).counter();
+            assertTrue(counter != null, "no series registered for source=" + source);
+            assertEquals(0, counter.count(), source + " should start at zero");
+        }
     }
 
     /**
