@@ -118,14 +118,39 @@ app:
   # proxy ceiling in front of this app (2 x 45s = 90s). A third entry would
   # breach that ceiling, so this list stays at two however many models exist.
   #
-  # Left unchanged by the 2026-08-16 audit: both entries are live, so it had no
-  # dead fallback to prune. Worth knowing that gemini-2.5-flash is now the
-  # oldest surviving model in any chain here — 2.0 is gone and 2.5-flash-lite is
-  # closed to new users, so it is the obvious next one to retire. When it goes,
-  # gemini-3.5-flash is the replacement, already carrying the vision chain.
+  # LITE models, and that is the whole fix for an outage. Menu scans were failing
+  # outright: measured on the 30-dish evaluation menu, gemini-flash-latest was
+  # returning 503 and gemini-2.5-flash needed ~100s of vision time against a 45s
+  # read timeout, so the chain burned both attempts and the budget, and every
+  # scan of a full menu ended as a 503. The same menu had taken ~41s when the
+  # timings were first measured, so the alias had drifted onto something far
+  # heavier underneath us — the standing risk of a *-latest alias on a path with
+  # a hard wall-clock ceiling.
+  #
+  # Timed on that menu, 2026-08-17, one scan each:
+  #   gemini-3.5-flash-lite     15.8s   30/30 dishes, not truncated
+  #   gemini-flash-lite-latest  15.9s   30/30 dishes, not truncated
+  #   gemini-3.1-flash-lite     53.8s   30/30 dishes, not truncated
+  #   gemini-3.5-flash          503
+  #   gemini-flash-latest       503
+  # Reading a menu is extraction and classification, not reasoning, so the lite
+  # models lose nothing here: all 30 dishes, no truncation, sensible tiers.
+  #
+  # Pinned model FIRST, alias second — the opposite of the other chains, on
+  # purpose. This path has a hard ceiling and an alias that drifts onto a slower
+  # model breaks it outright, which is exactly what happened. Predictability wins
+  # here; the alias stays as the safety net for the day the pinned one is retired
+  # (a 404 now falls through rather than failing the request).
+  #
+  # Honest caveat: those two may be the same model today — the timings are within
+  # 0.1s of each other. That still buys a retry, which is what a transient 503
+  # needs, and it becomes a real fallback the moment the alias moves.
+  #
+  # Re-time this when menus feel slow. `Menu scan finished in Xms (vision Yms...)`
+  # in the backend log is the number that matters.
   gemini-menu-models:
-    - gemini-flash-latest
-    - gemini-2.5-flash
+    - gemini-3.5-flash-lite
+    - gemini-flash-lite-latest
   # Only the Vite dev server needs a CORS entry — production serves the
   # frontend same-origin behind nginx. Extend (comma-separated) only if the
   # frontend is ever hosted on a different origin than the API.

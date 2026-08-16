@@ -22,13 +22,19 @@
 /** Stage boundaries in milliseconds since the request started. */
 const MEAL_STAGES = [0, 4000, 9000]
 /**
- * Four stages, not three, and far later boundaries than the meal flow — these
- * come from the "Menu scan finished" timing log in MenuRankingService rather
- * than from a guess. A menu sends a bigger image, waits on the model to emit a
- * JSON array of up to 60 dishes, then resolves nutrition for each one, so the
- * middle stretch genuinely runs past half a minute.
+ * Four stages, not three, and later boundaries than the meal flow — these come
+ * from the "Menu scan finished" timing log in MenuRankingService rather than
+ * from a guess. A menu sends a bigger image, waits on the model to emit a JSON
+ * array of up to 60 dishes, then resolves nutrition for each one.
+ *
+ * Re-measured 2026-08-17 after the menu chain moved to lite models: vision
+ * ~16s, nutrition ~3s, so a 30-dish menu now finishes near 20s rather than the
+ * ~41s these were first drawn from. Left as they were, the last two stages
+ * would never be reached at all — the response would land while the stepper was
+ * still on "reading the menu", and half the stages would be decoration. Re-time
+ * these whenever the menu model changes; that log line is the source.
  */
-const MENU_STAGES = [0, 3000, 36000, 41000]
+const MENU_STAGES = [0, 3000, 18000, 22000]
 const BARCODE_STAGES = [0, 1500]
 
 export const STAGE_COUNTS = {
@@ -47,10 +53,13 @@ export const STAGE_COUNTS = {
  */
 const OVERDUE_MS = {
   meal: 20000,
-  // Past the last measured menu stage (41s), not before it — at the old 30s
-  // this announced "taking longer than usual" while the scan was still inside
-  // its normal window, which is the opposite of reassuring.
-  menu: 60000,
+  // Past the last measured menu stage, not before it — at the old 30s this
+  // announced "taking longer than usual" while the scan was still inside its
+  // normal window, which is the opposite of reassuring. Now that a 30-dish menu
+  // lands near 20s, 60s was the opposite error: a scan could be twice its
+  // normal length and the screen would still claim everything was fine. The
+  // headroom left is for a 60-dish menu, which is roughly double the work.
+  menu: 45000,
   barcode: 8000,
 }
 
