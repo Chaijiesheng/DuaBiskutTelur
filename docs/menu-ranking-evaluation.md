@@ -345,6 +345,8 @@ Offline, net across both addenda: ρ 0.632 → 0.790. **That result did not surv
 
 ## 11. Addendum — what production actually measured, and what it invalidates
 
+> **Partly superseded by §12.** The conclusion below that the dish table is a *regression* did not survive re-measurement: the runs here were made through a model chain that was silently failing, and without the nutrition cache. §12 repeats the comparison properly and finds the table makes no measurable difference either way. The methodological lesson in this section — that scan-to-scan variance swamps the effects being chased — stands, and is why §12 uses eight runs per arm.
+
 Both addenda above were measured by replaying one captured scan with nutrition held fixed, which isolates a scoring change cleanly. Deploying and re-scanning the same menu image five times told a different story.
 
 | Phase | ρ per scan | Mean ρ | Sources used |
@@ -377,8 +379,62 @@ The scoring changes from §9 remain deployed: they are defensible on their own m
 
 ---
 
+## 12. Addendum — the three revised priorities, closed
+
+Dated 2026-08-17. All three items from §11 are now done, and the answer to the one they were gating is that **the dish table makes no measurable difference to the ranking**.
+
+### What changed first
+
+§11's priority 1 — cache resolved nutrition per canonical dish name — turned out to already exist on the other branch and landed in the merge. Priority 2, per-serving validation, was added along with a per-rule rejection counter, because the rate the §11 study inferred could not be checked against anything: the reason a match was thrown away existed only as log text, one dish at a time.
+
+A menu-scan outage was found while setting this up and is the reason the §10/§11 numbers cannot be compared with these ones directly. `gemini-flash-latest` had drifted onto a far heavier model; vision on this same 30-dish menu had gone from ~41 s to ~100 s against a 45 s read timeout, so **every full menu scan was returning 503**. Moving the menu chain to `gemini-3.5-flash-lite` brought it to ~16 s with all 30 dishes and no truncation. Every number below is from after that fix.
+
+### Method
+
+Eight runs per configuration against an **isolated instance** — its own container, its own ephemeral H2, production's database and its 165 cached dishes untouched. The nutrition cache is **disabled** in the harness: it pins resolution per dish name, so with it on, run 2 replays run 1 and configuration B replays configuration A. That single detail is what made the naive version of this experiment worthless, and it is why "five scans" no longer means what it meant in §11 — the cache removes precisely the lottery that repetition was averaging over, so independent samples now require a cleared cache rather than another scan.
+
+### Result
+
+| Configuration | runs | mean ρ | range | spread | τ-b | nutrition sources |
+|---|---|---|---|---|---|---|
+| Dish table **enabled** | 8 | 0.582 | 0.527–0.655 | 0.128 | 0.428 | local 51 %, usda 49 % |
+| Dish table **disabled** | 8 | 0.593 | 0.520–0.652 | 0.132 | 0.442 | estimated 48 %, usda 52 % |
+
+**Difference: −0.011, against a within-configuration spread of 0.132.** The 95 % confidence interval on the difference is about [−0.06, +0.04]; separating an effect this small would take hundreds of runs per arm, not eight.
+
+The flag was doing its job — 123 local-table hits with it on, zero with it off. So **replacing nearly half the dishes' nutrition with hand-curated data changed ranking quality not at all.**
+
+### Which rules actually reject
+
+First real use of the per-rule counter, across 240 dish resolutions per configuration:
+
+| Rule | table on | table off |
+|---|---|---|
+| `starch_without_carbs` | 17 | 14 |
+| `calorie_disagreement` | 16 | 14 |
+| `fiber_vs_carbs` | 8 | 5 |
+| `incomplete_row` | 3 | 1 |
+| `calories_per_serving` | 2 | 0 |
+
+Two corrections to §11 fall out of this. The rejection rate is **~19 % of lookups, not the 33–50 %** inferred from log lines. And rejection is not the main reason a dish falls past USDA: of the ~115 that do, only ~46 are rejections — the other ~70 are plain **misses**, where FoodData Central has no row at all. Those are different problems, and the larger one is coverage, not bad matches.
+
+The per-serving rules added in the same week fired twice between them; `sodium_density`, `sodium_per_serving` and `sugar_exceeds_carbs` fired not at all. They are loose guards against pathological rows, and they are not inflating the rejection rate — which was the stated risk when they went in.
+
+### A correction to an earlier reading of this same data
+
+A first attempt at this A/B, with three usable runs per arm, appeared to show the table buying dramatic *stability* — spread 0.003 enabled against 0.338 disabled. **It did not reproduce.** Both configurations now sit near 0.13. That run was made through the broken model chain, which rejected far more and pushed 80 % of dishes onto the table; with the working chain USDA succeeds on about half. The stability was an artefact of the outage, not a property of the table.
+
+### Verdict
+
+**Leave `app.local-dish-table-enabled` off**, and keep the table. It is now measured as neither helping nor hurting, so it costs nothing to retain as the mechanism for dishes USDA cannot answer, and there is no evidence for switching it on.
+
+The consequence for the roadmap is the sharper finding. Curated local composition data has been described as the highest-leverage accuracy work left in the product; on this benchmark it moved the ranking by 0.011. Curating more dishes would improve the calorie figures an individual user sees — a real benefit, and the honest reason to do it — but it should not be expected to improve the tier list, which is what the ranking is.
+
+---
+
 ### Appendix — reproduction
 
-- Menu image generated by `MenuGen.java`, submitted to `POST /api/menu/rank` on the production host (bypassing the CDN to avoid its ~100 s proxy ceiling).
+- Menu image generated by `MenuGen.java`, submitted to `POST /api/menu/rank` on the production host (bypassing the CDN to avoid its ~100 s proxy ceiling). That helper was not kept; §12 re-rendered the same 30 dishes as a printed-style menu from a short script, so the vision path is exercised rather than bypassed.
 - Rank statistics computed with average-rank Spearman and Kendall τ-b (tie-corrected); significance via the large-sample *t* approximation.
 - Re-scoring of corrected rows executed against the production `ScoringService` itself, not a reimplementation.
+- **§12 only:** run against an isolated container (own ephemeral H2, `NUTRITION_CACHE_ENABLED=false`, `LOCAL_DISH_TABLE_ENABLED` toggled per arm), never against the production database. Dish names were matched to the reference list by longest-key lookup with romanisation variants, and every run mapped all 30 dishes — a run matching fewer than 20 would have been discarded rather than scored on a subset.

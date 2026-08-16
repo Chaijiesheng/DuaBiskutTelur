@@ -107,9 +107,19 @@ the AI vendor can be swapped without touching the service layer.
    of the ordering — USDA asked first, a valid match ending it, the table
    answering only after a miss or a rejection, the model backstopping both.
 
-   **The table ships gated off** (`app.local-dish-table-enabled: false`) — see
-   Outstanding issues. `docs/menu-ranking-evaluation.md` §10–11 carries the
-   measurements.
+   **The table ships gated off** (`app.local-dish-table-enabled`, overridable as
+   `LOCAL_DISH_TABLE_ENABLED`), and stays off. Re-measured 2026-08-17 over 8
+   runs per setting: ρ 0.582 enabled against 0.593 disabled, a difference of
+   −0.011 inside a spread of 0.132 — the table neither helps nor hurts the
+   ranking. Keep it anyway; it is the only mechanism for dishes USDA cannot
+   answer, and it is now measured as costing nothing to retain.
+
+   Worth holding both facts together: the ρ 0.665/0.790 figures above still
+   justify the *ordering* — if the table is consulted at all, rescue-only beats
+   first-resort — but §12 shows consulting it at all is close to a wash. The
+   ordering question turned out to matter more than the feature does.
+   `docs/menu-ranking-evaluation.md` §10–12 carries the measurements, and §12
+   supersedes §11's claim that the table was actively hurting.
 5. **Resolution is pinned per dish** (`NutritionCacheService`, table
    `nutrition_cache`). Resolving a dish is otherwise a lottery — the USDA search
    can return a different top match or time out, and the model's fallback
@@ -393,29 +403,43 @@ documents / issue tracker):
     code in practice. They want tuning against a sample of real photos, and
     that sample is the prerequisite for the low-confidence path being useful
     rather than decorative.
-11. **Two local dish tables exist and neither is delivering the accuracy win.**
-    `LocalDishTable` (CSV, 55 dishes) is the one wired into resolution, as a
-    rescue after a failed USDA lookup — and it **ships gated off**
-    (`app.local-dish-table-enabled: false`), because production measured it
-    *hurting*: ρ 0.484 with the table enabled against 0.596 with it disabled
-    entirely. The cause is identified and is not the table's data. The
-    validator's rules were derived from per-serving pathologies but are applied
-    to per-100g density, so every threshold is wrong by the portion size; it
-    rejects 10–15 of 30 dishes per scan, and the rescue then displaces sound
-    USDA data far more often than the offline study modelled. **Fix the units,
-    re-measure over ≥5 scans, then open the gate** — in that order, and see
-    `docs/menu-ranking-evaluation.md` §11.
+11. **Curated local nutrition does not improve the ranking — measured, and it
+    is not the highest-leverage work left.** Re-measured 2026-08-17 over 8 runs
+    per configuration on an isolated instance (`docs/menu-ranking-evaluation.md`
+    §12): ρ 0.582 with the dish table enabled against 0.593 with it disabled, a
+    difference of −0.011 against a within-configuration spread of 0.132. The
+    flag was working — 123 local-table hits against zero — so **replacing
+    nearly half the dishes' nutrition with hand-curated rows changed ranking
+    quality not at all.**
+
+    This supersedes the earlier reading that the table was *hurting* (ρ 0.484
+    against 0.596). That comparison was taken through what turned out to be a
+    broken model chain and without the nutrition cache, and it did not
+    reproduce. So did a later claim that the table bought stability; that was an
+    artefact of the same outage.
+
+    **Leave `app.local-dish-table-enabled` off** (now overridable as
+    `LOCAL_DISH_TABLE_ENABLED`), and **keep the table**. It is measured as
+    neither helping nor hurting, so it costs nothing to retain as the mechanism
+    for dishes USDA cannot answer, and there is nothing to justify switching it
+    on.
 
     `local_food` + `local_food_alias` (the DB-backed `LocalFoodService`) is the
-    other, and it is **empty and unreferenced**. Its mechanism, trust badge,
-    plausibility checks and seed format are all in place; what is missing is
-    ~150 dishes transcribed from MyFCD / Singapore HPB into
+    second implementation, and it is **empty and unreferenced**. Its mechanism,
+    trust badge, plausibility checks and seed format are all in place; what is
+    missing is ~150 dishes transcribed from MyFCD / Singapore HPB into
     `R__local_food_seed.sql`. Do not fill it with recalled or generated figures
     — see the file header. Before doing that transcription, decide whether this
     implementation survives at all or whether the CSV absorbs it, so the work
-    lands once. Curated local composition data remains the single
-    highest-leverage accuracy work left in the product, and it is a data task,
-    not an engineering one.
+    lands once.
+
+    **What that transcription is and is not worth.** It would improve the
+    calorie figures an individual user sees, which is a real benefit and the
+    honest reason to do it. It should not be expected to improve the tier list.
+    The larger accuracy gap is coverage rather than bad matches: of the dishes
+    that fall past USDA, only about 40% are validator rejections — the rest are
+    plain misses, where FoodData Central has no row at all. `usda.match.rejected`
+    against `nutrition.source` is how to watch that ratio.
 12. A dish's *first* portion estimate still pins the portion every later menu
     scan replays (`nutrition_cache.grams`). Portion corrections deliberately do
     not write back to that shared table - see below - so a dish first resolved
