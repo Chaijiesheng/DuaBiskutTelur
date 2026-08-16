@@ -33,6 +33,18 @@ class NutritionValidatorTest {
         return new NutrientsPer100g(description, kcal, protein, carbs, fat, fiber, 2, 500);
     }
 
+    /**
+     * As {@link #estimate}, but with the portion the model saw made explicit —
+     * the per-serving rules multiply by it, so it is the variable under test
+     * rather than a fixed 400g detail.
+     */
+    private static IdentifiedFood servingOf(String name, double grams, double kcal, double protein,
+                                            double carbs, double fat, double fiber) {
+        return new IdentifiedFood(name, "1 serving", grams, grams * 0.8, grams * 1.2, name,
+                kcal, protein, carbs, fat, fiber, 3, 400, "protein", "steamed", 0.9,
+                IdentifiedFood.KIND_MAIN);
+    }
+
     @Test
     void acceptsAMatchThatAgreesWithTheModel() {
         Optional<Rejection> reason = NutritionValidator.rejectionReason(
@@ -74,7 +86,17 @@ class NutritionValidatorTest {
         assertEquals(Rule.CALORIE_DISAGREEMENT, reason.get().rule(), reason.get().message());
     }
 
-    /** "Nasi lemak" resolved to plain chicken: 120g protein per serving, no carbohydrate at all. */
+    /**
+     * "Nasi lemak" resolved to plain chicken: 120g protein per serving, no
+     * carbohydrate at all.
+     *
+     * <p>Also pins rule <em>order</em>, which became load-bearing once the
+     * sugar-versus-carbohydrate check arrived. This row has no carbohydrate and
+     * a little sugar, so that check would also fire — and reporting it would
+     * describe a wrong-food match as a sugar-data problem, sending anyone
+     * reading the metric after the wrong thing entirely. The sugar rule
+     * therefore requires carbohydrate to be present and runs after this one.
+     */
     @Test
     void rejectsAStarchDishThatCameBackWithNoStarch() {
         Optional<Rejection> reason = NutritionValidator.rejectionReason(
@@ -160,6 +182,91 @@ class NutritionValidatorTest {
                 estimate("Black pepper chicken chop rice", 200, 9, 25, 7, 1.2));
 
         assertEquals(Rule.FIBER_VS_CARBS, reason.get().rule(), reason.get().message());
+    }
+
+    /**
+     * The real case this rule was added for. "Chicken satay" resolved to a row
+     * carrying 3345mg of sodium per 100g and it was used, because nothing looked
+     * at sodium at any scale. That is soy sauce, not satay — six times the
+     * saltiest row in the curated table.
+     */
+    @Test
+    void rejectsSodiumOnlyASauceReaches() {
+        Optional<Rejection> reason = NutritionValidator.rejectionReason(
+                new NutrientsPer100g("Sauce, soy, shoyu", 60, 8, 5, 0.1, 0.8, 1.5, 3345),
+                estimate("Chicken Satay", 200, 15, 8, 12, 1));
+
+        assertEquals(Rule.SODIUM_DENSITY, reason.get().rule(), reason.get().message());
+    }
+
+    /**
+     * Sugar is a component of carbohydrate, so more of the part than the whole
+     * means one of the two came from a different food. Arithmetic, not a
+     * threshold — and sugar drives its own penalty in the scorer, so a bogus
+     * figure moves the grade.
+     */
+    @Test
+    void rejectsMoreSugarThanCarbohydrate() {
+        Optional<Rejection> reason = NutritionValidator.rejectionReason(
+                new NutrientsPer100g("Confection, mixed row", 300, 2, 20, 5, 1, 45, 100),
+                estimate("Cendol", 130, 1.5, 22, 4, 0.8));
+
+        assertEquals(Rule.SUGAR_EXCEEDS_CARBS, reason.get().rule(), reason.get().message());
+    }
+
+    /**
+     * The gap the per-serving family exists to close: every per-100g figure here
+     * is arguable, and the plate it describes is not. Nothing in the density
+     * checks can see this, because the fault only appears once the portion is
+     * applied.
+     */
+    @Test
+    void rejectsAServingTotalNoSingleDishReaches() {
+        Optional<Rejection> reason = NutritionValidator.rejectionReason(
+                match("Pastry, mixed, rich", 450, 8, 45, 26, 2),
+                servingOf("Karipap platter", 800, 400, 8, 40, 20, 2));
+
+        assertEquals(Rule.CALORIES_PER_SERVING, reason.get().rule(), reason.get().message());
+    }
+
+    @Test
+    void rejectsSodiumPerServingBeyondAnyDish() {
+        Optional<Rejection> reason = NutritionValidator.rejectionReason(
+                new NutrientsPer100g("Broth, concentrated", 120, 6, 10, 5, 1, 2, 1400),
+                servingOf("Bak Kut Teh", 600, 100, 7, 2, 5, 0.4));
+
+        assertEquals(Rule.SODIUM_PER_SERVING, reason.get().rule(), reason.get().message());
+    }
+
+    /**
+     * A large plate is a real thing. 700g of mixed rice at a sane density is
+     * roughly 1100 kcal, and rejecting it would be the validator second-guessing
+     * plausible data rather than catching nonsense — the line the whole file is
+     * written to hold.
+     */
+    @Test
+    void keepsAGenuinelyLargePlate() {
+        Optional<Rejection> reason = NutritionValidator.rejectionReason(
+                match("Rice, mixed dish, cooked", 156, 7.5, 20, 5, 1.3),
+                servingOf("Nasi Campur", 700, 160, 8, 21, 5, 1.4));
+
+        assertTrue(reason.isEmpty(), "a big plate is not a broken row: "
+                + reason.map(Rejection::message).orElse(""));
+    }
+
+    /**
+     * With no portion there is nothing to multiply by, so the per-serving family
+     * sits out rather than assuming a number and then judging the row against
+     * its own assumption.
+     */
+    @Test
+    void skipsThePerServingChecksWhenNoPortionWasEstimated() {
+        Optional<Rejection> reason = NutritionValidator.rejectionReason(
+                new NutrientsPer100g("Broth, concentrated", 120, 6, 10, 5, 1, 2, 1400),
+                servingOf("Mystery soup", 0, 100, 7, 2, 5, 0.4));
+
+        assertTrue(reason.isEmpty(), "nothing to scale by: "
+                + reason.map(Rejection::message).orElse(""));
     }
 
     /**

@@ -198,7 +198,7 @@ class UsdaRejectionMetricsTest {
             assertEquals(rule.tag(), rule.tag().toLowerCase(java.util.Locale.ROOT));
             assertTrue(rule.tag().matches("[a-z_]+"), rule + " -> " + rule.tag());
         }
-        assertEquals(11, NutritionValidator.Rule.values().length,
+        assertEquals(15, NutritionValidator.Rule.values().length,
                 "a new rule needs a tag and a test; see NutritionValidatorTest");
     }
 }

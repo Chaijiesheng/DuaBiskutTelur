@@ -17,13 +17,25 @@ import java.util.Optional;
  * they're simply wrong numbers with a "usda" label on them, which then drive
  * the score and the ranking.
  *
- * <p>Two families of check. The first is absolute: values no food can have,
- * caught without reference to anything else. The second compares the match
- * against what the vision model independently estimated for the same dish —
- * both are per-100g, so they're directly comparable. Neither number is
- * authoritative on its own, but a large disagreement means they are describing
- * different foods, and between a generic database row and a model that actually
- * read the dish name, the model is the safer of the two.
+ * <p>Three families of check, in the order they run.
+ *
+ * <p><b>Per 100g, absolute.</b> Values no food can have, caught without
+ * reference to anything else — plus two pieces of pure arithmetic, that macros
+ * must reconcile with stated energy at 4/4/9 and that sugar cannot exceed the
+ * carbohydrate it is part of.
+ *
+ * <p><b>Per serving.</b> Density times the portion the model saw. A row can be
+ * arguable per 100g and absurd on the plate, and the first family cannot see it
+ * — this is why "254 kcal/100g" passes while the bowl it describes does not.
+ * Note what this cannot do: a serving total is density times portion and the
+ * check cannot say which was wrong. Rejecting helps when the density was at
+ * fault; when the portion estimate is the bad number, rejection keeps it.
+ *
+ * <p><b>Against the model's own estimate.</b> Both are per-100g, so they're
+ * directly comparable. Neither number is authoritative on its own, but a large
+ * disagreement means they are describing different foods, and between a generic
+ * database row and a model that actually read the dish name, the model is the
+ * safer of the two.
  *
  * <p>Thresholds are deliberately loose. This is a guard against nonsense, not a
  * second opinion on plausible data — a match only has to be arguable to pass.
@@ -70,6 +82,42 @@ final class NutritionValidator {
     /** A dish named after its starch has to contain some. */
     private static final double MIN_CARBS_FOR_STARCH_DISH_PER_100G = 8;
 
+    /**
+     * Sodium was not checked at any scale until now, which is how a chicken
+     * satay resolved to a row carrying 3345 mg/100g and was used — soy-sauce
+     * territory, roughly six times the saltiest dish in the curated table. The
+     * bound is set well clear of real food: across 55 curated Malaysian dishes
+     * the highest is sambal at 900 mg/100g, and the highest actual dish is 600.
+     */
+    private static final double MAX_SODIUM_PER_100G = 2000;
+
+    /*
+     * The per-serving family, added because the density checks above cannot see
+     * a whole class of fault: a match whose density is arguable becomes absurd
+     * once multiplied by the portion. Those are separate questions and both have
+     * to be asked.
+     *
+     * Set very loose on purpose. The validator already turns away 10-15 dishes
+     * of 30 on a menu scan, and these are meant to catch plates no single dish
+     * reaches, not to add a second opinion on large ones — a 700g mixed-rice
+     * plate is a real thing and must survive. Each rule is separately tagged in
+     * usda.match.rejected, so if one of them does start firing often, it says so
+     * itself rather than hiding inside the total.
+     *
+     * Known limit, worth stating plainly: a serving total is density times
+     * portion, and this cannot tell which of the two was wrong. Rejecting the
+     * match only helps when the density was at fault. When the portion estimate
+     * is the bad number, rejection swaps in the model's density and keeps the
+     * same wrong portion — outstanding item 12, not something a nutrition check
+     * can fix.
+     */
+
+    /** Beyond any single served dish; a whole day's budget is ~2000. */
+    private static final double MAX_KCAL_PER_SERVING = 2000;
+
+    /** WHO's whole-day guidance is 2000mg. No one dish delivers two and a half days of it. */
+    private static final double MAX_SODIUM_PER_SERVING = 5000;
+
     /** Dish names that promise a starch base, in the romanisations menus actually use. */
     private static final java.util.regex.Pattern STARCH_DISH = java.util.regex.Pattern.compile(
             "\\b(nasi|rice|mee|mi|mihun|bihun|noodle|kway|kuey|koay|teow|hor fun|"
@@ -82,7 +130,7 @@ final class NutritionValidator {
      * <p>Separate from the message because the message interpolates the actual
      * numbers, and a metric tagged with those would be a new time series per
      * dish — an unbounded tag is a slow memory leak that also makes the
-     * dashboard useless. These eleven are the whole vocabulary.
+     * dashboard useless. These fifteen are the whole vocabulary.
      *
      * <p>The rejection rate is what sets how often the resolver falls past USDA,
      * so it decides how much work the curated table and the model estimate are
@@ -100,9 +148,13 @@ final class NutritionValidator {
         MACROS_UNRECONCILED,
         PROTEIN_DENSITY,
         CARB_DENSITY,
+        SODIUM_DENSITY,
         FIBER_VS_CARBS,
         INCOMPLETE_ROW,
         STARCH_WITHOUT_CARBS,
+        SUGAR_EXCEEDS_CARBS,
+        CALORIES_PER_SERVING,
+        SODIUM_PER_SERVING,
         CALORIE_DISAGREEMENT,
         FIBER_DISAGREEMENT;
 
@@ -153,6 +205,11 @@ final class NutritionValidator {
                     "implausible carbohydrate: %.1fg/100g — reads as a dry ingredient, not a served dish"
                             .formatted(match.carbs()));
         }
+        if (match.sodium() > MAX_SODIUM_PER_100G) {
+            return reject(Rule.SODIUM_DENSITY,
+                    "implausible sodium: %.0fmg/100g — reads as a sauce or seasoning, not a dish"
+                            .formatted(match.sodium()));
+        }
         if (match.carbs() > 0 && match.fiber() > match.carbs() * MAX_FIBER_SHARE_OF_CARBS) {
             return reject(Rule.FIBER_VS_CARBS,
                     "%.1fg fibre against %.1fg carbohydrate — too bran-like for this dish"
@@ -171,6 +228,44 @@ final class NutritionValidator {
             return reject(Rule.STARCH_WITHOUT_CARBS,
                     "only %.1fg carbohydrate/100g for a dish named as a rice, noodle or bread"
                             .formatted(match.carbs()));
+        }
+
+        // Arithmetic rather than a threshold: sugars are a component of
+        // carbohydrate, so more of the part than the whole means one of the two
+        // was copied from a different food. Nothing checked this, and sugar
+        // drives its own penalty in the scorer.
+        //
+        // Deliberately last of the per-100g checks, and only where there is a
+        // whole to be a part of. A row with no carbohydrate at all is a row
+        // missing carbohydrate data — the starch rule above says something far
+        // more useful about it, and firing here instead would report a
+        // wrong-food match as a sugar-data problem on the dashboard. The
+        // half-gram allowance is for rows that merely round badly.
+        if (match.carbs() > 0 && match.sugar() > match.carbs() + 0.5) {
+            return reject(Rule.SUGAR_EXCEEDS_CARBS,
+                    "%.1fg sugar against %.1fg carbohydrate — sugar is part of carbohydrate"
+                            .formatted(match.sugar(), match.carbs()));
+        }
+
+        // Everything above judged the match per 100g. These two ask the separate
+        // question of what lands on the plate: a density that is merely arguable
+        // can still produce a serving no dish reaches. Skipped entirely when the
+        // model gave no portion — there is nothing to multiply by, and assuming
+        // one would invent the very number being checked.
+        double grams = modelEstimate.grams();
+        if (grams > 0) {
+            double servingCalories = match.calories() * grams / 100.0;
+            if (servingCalories > MAX_KCAL_PER_SERVING) {
+                return reject(Rule.CALORIES_PER_SERVING,
+                        "%.0f kcal for a %.0fg serving — beyond any single dish"
+                                .formatted(servingCalories, grams));
+            }
+            double servingSodium = match.sodium() * grams / 100.0;
+            if (servingSodium > MAX_SODIUM_PER_SERVING) {
+                return reject(Rule.SODIUM_PER_SERVING,
+                        "%.0fmg sodium for a %.0fg serving — over two days' worth in one dish"
+                                .formatted(servingSodium, grams));
+            }
         }
 
         // The model didn't venture an estimate, so there's nothing to compare
