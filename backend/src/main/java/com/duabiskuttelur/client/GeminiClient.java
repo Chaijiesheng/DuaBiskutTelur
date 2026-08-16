@@ -601,7 +601,27 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
                                     e.getStatusCode().value(), model);
                             deadModels.add(model);
                             break; // next model — this failure isn't key-related
+                        } else if (e.getStatusCode().value() == HttpStatus.NOT_FOUND.value()) {
+                            // A retired model. Google has now removed three of
+                            // them, and until this branch existed a retired entry
+                            // did worse than fail to help: reaching it threw, so
+                            // an overload on the *first* model turned into a hard
+                            // error instead of the graceful 503 the fallback chain
+                            // exists to produce. It is the same situation as a
+                            // 5xx — this model is out, the next one may work.
+                            //
+                            // Still recorded as client_error above, which is how
+                            // the next deprecation announces itself:
+                            // gemini.call{model=X,outcome=client_error} on a model
+                            // that used to succeed.
+                            log.warn("Gemini model {} is gone (404: {}); retiring it for this request "
+                                            + "and trying the next fallback",
+                                    model, e.getStatusCode().value());
+                            deadModels.add(model);
+                            break;
                         } else {
+                            // 400, 403 and friends are the request or the key
+                            // being wrong, which the next model would repeat.
                             throw e;
                         }
                     } catch (TruncatedResponseException e) {

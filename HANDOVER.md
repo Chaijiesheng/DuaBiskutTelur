@@ -384,13 +384,10 @@ documents / issue tracker):
    is ever run outside this Compose setup or fronted differently. A
    backend-side limiter (e.g. Bucket4j on the three `permitAll` endpoints)
    would make the limit a property of the application instead.
-9. Two configured Gemini fallback models are dead, found while verifying the
-   response schema against the live API: `gemini-2.5-flash-lite` returns "no
-   longer available to new users", and `gemini-2.0-flash` /
-   `gemini-2.0-flash-lite` return quota-exceeded on the current keys. The chains
-   in `application.yml` therefore have fewer real fallbacks than they look like
-   they do — `gemini-flash-latest` (→ 3.6) and `gemini-flash-lite-latest`
-   (→ 3.5-lite) are carrying them alone. Worth pruning and re-picking.
+9. ~~Two configured Gemini fallback models are dead.~~ **Closed 2026-08-16** —
+   see "Dead Gemini fallbacks" under Recently closed. It was three, not two,
+   and the consequence was worse than a short chain: a retired model *threw*,
+   so reaching one aborted the request instead of falling through.
 10. Model confidence is poorly calibrated — it clusters near 0.95 regardless of
     difficulty — so the AI2 thresholds (0.6 / 0.45) are currently near-dead
     code in practice. They want tuning against a sample of real photos, and
@@ -432,6 +429,45 @@ documents / issue tracker):
    raw one, so the rate of attempts is at least visible.
 
 ### Recently closed
+
+- **Dead Gemini fallbacks, and a chain that aborted on reaching one** (item 9).
+  Three of the configured models are retired, not two: `gemini-2.0-flash` and
+  `gemini-2.0-flash-lite` answer 404 "no longer available", and
+  `gemini-2.5-flash-lite` answers 404 "no longer available to new users".
+
+  **Being listed is not being usable, and that distinction is the whole trap.**
+  `gemini-2.5-flash-lite` is still returned by ListModels and still 404s when
+  called, so an audit that only enumerates models would have declared this chain
+  healthy. Every entry now in `application.yml` was verified with a real
+  one-token `generateContent` call against the production key on 2026-08-16.
+
+  **The consequence was worse than a short chain.** `callWithRetry` falls
+  through to the next model on a 429 or a 5xx and *rethrows* anything else — so
+  a 404 did not merely fail to help, it aborted the whole request on arrival.
+  The dead entries sat behind live ones, so nothing surfaced until the day the
+  live model was overloaded: at that moment the fallback chain, which exists to
+  degrade gracefully, converted an ordinary 5xx into a hard error. The feedback
+  chain was the worst case — one live model behind two corpses, so its *first*
+  fallback was fatal. A 404 is now treated exactly like a 5xx: retire that model
+  for the request and try the next. 400 and 403 still fail fast, since the next
+  model would answer identically.
+
+  **Chains now** (all verified live): vision `gemini-flash-latest` →
+  `gemini-3.5-flash` → `gemini-2.5-flash`; feedback `gemini-flash-lite-latest` →
+  `gemini-3.1-flash-lite` → `gemini-2.5-flash`; menu unchanged at
+  `gemini-flash-latest` → `gemini-2.5-flash` (both live, and a third entry would
+  breach the ~100s proxy ceiling at 45s per attempt).
+
+  Fallbacks are pinned to versions clearly older than whatever the `*-latest`
+  aliases resolve to. The API does not report where an alias points, so naming
+  the newest pinned model as its own fallback risks a chain whose first two
+  entries are the same model — a fallback that fails in exactly the situation it
+  exists for.
+
+  **How the next retirement announces itself:**
+  `gemini.call{model=X,outcome=client_error}` on a model that used to succeed.
+  `gemini-2.5-flash` is the oldest survivor and the obvious next to go;
+  `gemini-3.5-flash` is its replacement, already carrying the vision chain.
 
 - **A menu scan could not be shared at all** — no control, top or bottom, and no
   card to share. The tier list is the most shareable thing the app makes and it
@@ -859,7 +895,7 @@ documents / issue tracker):
   - `nutrition.source{source}` is the review's first question as a ratio.
     `nutrition.cache{result}` keeps `memo_hit` and `store_hit` apart, because a
     warm process still reading the table every time is the case worth seeing.
-  - `usda.match.rejected{rule}` names *which* of `NutritionValidator`'s eleven
+  - `usda.match.rejected{rule}` names *which* of `NutritionValidator`'s fifteen
     checks turned a match away. This is the number that governs the rest of the
     path — a rejection falls to the curated dish table, or past it to a model
     estimate — and production was rejecting 10–15 dishes out of 30 on one menu

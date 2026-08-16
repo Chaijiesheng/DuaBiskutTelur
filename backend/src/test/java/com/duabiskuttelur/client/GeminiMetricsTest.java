@@ -175,6 +175,55 @@ class GeminiMetricsTest {
         assertEquals(0, chainCount("vision", AppMetrics.OUTCOME_BUSY));
     }
 
+    /**
+     * A retired model must not take the request down with it.
+     *
+     * <p>Google has now removed three of the configured models —
+     * {@code gemini-2.0-flash}, {@code gemini-2.0-flash-lite} and, for new
+     * users, {@code gemini-2.5-flash-lite} — each answering 404. Until the chain
+     * handled that, a dead entry did worse than fail to help: reaching it threw,
+     * so an overload on the *first* model became a hard error rather than the
+     * graceful degradation the fallback list exists for. The dead entries sat
+     * behind live ones, which is why nothing surfaced until the day the live one
+     * was busy.
+     */
+    @Test
+    void aRetiredModelIsSkippedRatherThanFailingTheWholeChain() throws Exception {
+        startServer();
+        respond("/v1beta/models/retired-model:generateContent", 404,
+                "{\"error\":{\"status\":\"NOT_FOUND\",\"message\":\"This model is no longer available.\"}}");
+        respond("/v1beta/models/live-model:generateContent", 200, EMPTY_LIST);
+        server.start();
+
+        clientFor(List.of("retired-model", "live-model")).identifyFoods(FAKE_IMAGE, "image/jpeg");
+
+        assertEquals(1, callCount("retired-model", "vision", AppMetrics.OUTCOME_CLIENT_ERROR));
+        assertEquals(1, callCount("live-model", "vision", AppMetrics.OUTCOME_SUCCESS));
+        // The chain succeeded, so the user never saw the deprecation.
+        assertEquals(1, chainCount("vision", AppMetrics.OUTCOME_SUCCESS));
+    }
+
+    /**
+     * The retirement branch must not swallow the errors it sits next to. A 400 is
+     * the request being malformed and a 403 is the key being wrong; the next
+     * model would answer identically, so burning the chain on them wastes the
+     * wall-clock budget and buries the real cause.
+     */
+    @Test
+    void aMalformedRequestStillFailsImmediatelyInsteadOfWalkingTheChain() throws Exception {
+        startServer();
+        respond("/v1beta/models/bad-request-model:generateContent", 400,
+                "{\"error\":{\"status\":\"INVALID_ARGUMENT\",\"message\":\"bad request\"}}");
+        respond("/v1beta/models/live-model:generateContent", 200, EMPTY_LIST);
+        server.start();
+
+        assertThrows(Exception.class,
+                () -> clientFor(List.of("bad-request-model", "live-model")).identifyFoods(FAKE_IMAGE, "image/jpeg"));
+
+        assertEquals(1, callCount("bad-request-model", "vision", AppMetrics.OUTCOME_CLIENT_ERROR));
+        assertEquals(0, callCount("live-model", "vision", AppMetrics.OUTCOME_SUCCESS));
+    }
+
     @Test
     void publishesFreeBulkheadSlotsSoPressureIsVisibleBeforeAnythingIsShed() {
         AppProperties props = new AppProperties();
