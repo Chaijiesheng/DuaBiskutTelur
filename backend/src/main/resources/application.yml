@@ -190,7 +190,12 @@ app:
   # made production rankings worse (rho 0.42-0.58 vs 0.63 without). Re-enable
   # once the validator rejects on per-serving totals rather than per-100g
   # density -- see docs/menu-ranking-evaluation.md.
-  local-dish-table-enabled: false
+  # Overridable by env so the A/B can be run without a rebuild, and so it can be
+  # switched off in an incident. Note that flipping it only affects dishes
+  # resolved *after* the flip: anything already in nutrition_cache replays its
+  # pinned answer and never reaches this branch, so a comparison between the two
+  # settings is only measuring anything if the cache is cleared in between.
+  local-dish-table-enabled: ${LOCAL_DISH_TABLE_ENABLED:false}
   nutrition-cache-enabled: ${NUTRITION_CACHE_ENABLED:true}
 
 # Scoring engine thresholds — every value here is tunable (see ScoringProperties)
