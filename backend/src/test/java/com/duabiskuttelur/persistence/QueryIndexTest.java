@@ -107,6 +107,7 @@ class QueryIndexTest {
             // uk_workout_exercise_slot
             "WorkoutSessionExerciseRepository#findBySessionIdOrderByPositionAsc",
             "WorkoutSessionExerciseRepository#findBySessionIdAndPosition",
+            "WorkoutSessionExerciseRepository#findBySessionIdIn",
             "WorkoutSessionExerciseRepository#deleteBySessionIdIn",
             // uk_workout_set_log
             "WorkoutSetLogRepository#findBySessionId",
@@ -455,6 +456,10 @@ class QueryIndexTest {
                 "SELECT * FROM workout_session_exercise WHERE session_id = 3 AND position = 2");
         assertUsesIndex("UK_WORKOUT_EXERCISE_SLOT",
                 "DELETE FROM workout_session_exercise WHERE session_id IN (3, 4)");
+        // The strength-progression read on the Analysis tab, which spans a month
+        // of sessions in one query rather than thirty.
+        assertUsesIndex("UK_WORKOUT_EXERCISE_SLOT",
+                "SELECT * FROM workout_session_exercise WHERE session_id IN (3, 4, 5)");
 
         // uk_workout_set_log — the idempotence probe runs on every logged set,
         // which is the highest-frequency write in the feature.

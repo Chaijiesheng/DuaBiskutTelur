@@ -5,8 +5,10 @@ import com.duabiskuttelur.model.WorkoutAlternative;
 import com.duabiskuttelur.model.WorkoutCoachNote;
 import com.duabiskuttelur.model.WorkoutCompleteRequest;
 import com.duabiskuttelur.model.WorkoutCompletionResponse;
+import com.duabiskuttelur.model.WorkoutHistoryResponse;
 import com.duabiskuttelur.model.WorkoutProfileRequest;
 import com.duabiskuttelur.model.WorkoutSessionView;
+import com.duabiskuttelur.model.WorkoutStatsResponse;
 import com.duabiskuttelur.model.WorkoutTodayResponse;
 import com.duabiskuttelur.persistence.WorkoutProfileEntity;
 import com.duabiskuttelur.persistence.WorkoutProfileRepository;
@@ -77,6 +79,20 @@ public class WorkoutService {
 
     /** Sessions read back for the streak, the week strip and the coach's context. */
     private static final int RECENT_WINDOW_DAYS = 35;
+
+    /**
+     * The window the History and Analysis tabs read.
+     *
+     * <p>Wider than the dashboard's, because those two screens answer questions
+     * about the past rather than about today: a 35-day window would silently cap
+     * "best streak" and the strength progressions at five weeks, and a personal
+     * best that quietly expires is worse than none.
+     *
+     * <p>Bounded rather than unbounded on purpose — this is a per-user list read
+     * on a tab switch, and "everything ever" is a query whose cost grows with
+     * how loyal the user is.
+     */
+    private static final int HISTORY_WINDOW_DAYS = 120;
 
     /** How many past ratings the planner is allowed to react to. */
     private static final int RECENT_FEELS = 3;
@@ -463,11 +479,207 @@ public class WorkoutService {
                 reply.source().tag());
     }
 
+    // ------------------------------------------------- history and analysis
+
+    /**
+     * The Workouts tab inside the History screen.
+     *
+     * <p>Read-only, and separate from {@link #today} on purpose: that method
+     * plans a session when there isn't one, and looking at last week's training
+     * must not create this morning's workout as a side effect.
+     */
+    public WorkoutHistoryResponse history(long userId) {
+        LocalDate today = today();
+        List<WorkoutSessionEntity> recent = sessionsSince(userId, today, HISTORY_WINDOW_DAYS);
+        Map<Long, Integer> logged = setCountsFor(recent);
+        Map<Long, Integer> plannedBySession = plannedSetCountsFor(recent);
+
+        List<WorkoutHistoryResponse.Entry> entries = recent.stream()
+                .sorted(Comparator.comparing(WorkoutSessionEntity::getSessionDate).reversed())
+                .map(s -> new WorkoutHistoryResponse.Entry(
+                        s.getId(), s.getSessionDate().toString(), s.getTitle(), s.getFocus(),
+                        s.getLevel(), effectiveMinutes(s), s.getStatus(),
+                        logged.getOrDefault(s.getId(), 0),
+                        plannedBySession.getOrDefault(s.getId(), 0)))
+                .toList();
+
+        LocalDate monday = today.minusDays(today.getDayOfWeek().getValue() - 1L);
+        Map<LocalDate, Integer> minutesByDate = recent.stream()
+                .filter(s -> Status.COMPLETED.tag().equals(s.getStatus()))
+                .collect(Collectors.toMap(WorkoutSessionEntity::getSessionDate,
+                        WorkoutService::effectiveMinutes, Integer::sum));
+
+        List<WorkoutHistoryResponse.DayMinutes> week = new ArrayList<>();
+        int weekMinutes = 0;
+        for (int i = 0; i < 7; i++) {
+            LocalDate day = monday.plusDays(i);
+            int minutes = minutesByDate.getOrDefault(day, 0);
+            weekMinutes += minutes;
+            week.add(new WorkoutHistoryResponse.DayMinutes(day.toString(),
+                    day.getDayOfWeek().getDisplayName(TextStyle.NARROW, Locale.ENGLISH), minutes));
+        }
+        return new WorkoutHistoryResponse(entries, week, weekMinutes);
+    }
+
+    /** What a session actually took, falling back to what it was planned to take. */
+    private static int effectiveMinutes(WorkoutSessionEntity s) {
+        return s.getActualMinutes() != null && s.getActualMinutes() > 0
+                ? s.getActualMinutes()
+                : s.getMinutes();
+    }
+
+    private Map<Long, Integer> setCountsFor(List<WorkoutSessionEntity> sessions) {
+        if (sessions.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Integer> counts = new java.util.HashMap<>();
+        for (WorkoutSessionEntity s : sessions) {
+            counts.put(s.getId(), setLogs.findBySessionId(s.getId()).size());
+        }
+        return counts;
+    }
+
+    private Map<Long, Integer> plannedSetCountsFor(List<WorkoutSessionEntity> sessions) {
+        if (sessions.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Integer> counts = new java.util.HashMap<>();
+        for (WorkoutSessionEntity s : sessions) {
+            counts.put(s.getId(), exercises.findBySessionIdOrderByPositionAsc(s.getId()).stream()
+                    .mapToInt(WorkoutSessionExerciseEntity::getSets).sum());
+        }
+        return counts;
+    }
+
+    /** Workout figures for the Analysis tab. */
+    public WorkoutStatsResponse stats(long userId) {
+        Optional<WorkoutProfile> maybeProfile = profile(userId);
+        LocalDate today = today();
+        List<WorkoutSessionEntity> recent = sessionsSince(userId, today, HISTORY_WINDOW_DAYS);
+        List<WorkoutSessionEntity> completed = recent.stream()
+                .filter(s -> Status.COMPLETED.tag().equals(s.getStatus()))
+                .toList();
+        List<WorkoutSessionEntity> thisMonth = completed.stream()
+                .filter(s -> s.getSessionDate().getMonth() == today.getMonth()
+                        && s.getSessionDate().getYear() == today.getYear())
+                .toList();
+
+        int expected = maybeProfile.map(p -> expectedSessionsThisMonth(p, today)).orElse(0);
+        int consistency = expected == 0 ? 0
+                : (int) Math.round(100.0 * Math.min(thisMonth.size(), expected) / expected);
+
+        return new WorkoutStatsResponse(
+                maybeProfile.isPresent(),
+                thisMonth.size(),
+                thisMonth.stream().mapToInt(WorkoutService::effectiveMinutes).sum(),
+                consistency,
+                expected,
+                streak(recent, today),
+                bestStreak(completed),
+                progressions(completed));
+    }
+
+    /**
+     * How many sessions the plan called for so far this month.
+     *
+     * <p>Counted from the rotation rather than from stored rows, which is the
+     * only honest version: a session row exists only for a day the user actually
+     * opened the tab, so "completed / sessions in the database" would score
+     * somebody who never opened the app at 100%. This asks what they said they
+     * would do and compares it to what they did.
+     *
+     * <p>Only days up to today count — being at 50% on the 15th is not the same
+     * failure as being at 50% on the 31st, and the tile would read as the latter.
+     */
+    static int expectedSessionsThisMonth(WorkoutProfile profile, LocalDate today) {
+        LocalDate first = today.withDayOfMonth(1);
+        int count = 0;
+        for (LocalDate day = first; !day.isAfter(today); day = day.plusDays(1)) {
+            if (isTrainingDay(day, profile)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** The longest run of consecutive completed days on record. */
+    static int bestStreak(List<WorkoutSessionEntity> completed) {
+        Set<LocalDate> done = completed.stream()
+                .map(WorkoutSessionEntity::getSessionDate)
+                .collect(Collectors.toCollection(java.util.TreeSet::new));
+        int best = 0;
+        int run = 0;
+        LocalDate previous = null;
+        for (LocalDate day : done) {
+            run = previous != null && previous.plusDays(1).equals(day) ? run + 1 : 1;
+            previous = day;
+            best = Math.max(best, run);
+        }
+        return best;
+    }
+
+    /**
+     * Exercises whose prescribed dose has gone up.
+     *
+     * <p>Both ends are prescriptions from completed sessions, never a claim the
+     * user typed — the catalogue sets the starting dose and the planner raises
+     * it, so this is the app showing its own working rather than flattering
+     * anybody. Only increases are listed: a dose that dropped after a "too hard"
+     * rating is the system working correctly, and putting it under "getting
+     * stronger" would read as a rebuke.
+     */
+    private List<WorkoutStatsResponse.Progression> progressions(List<WorkoutSessionEntity> completed) {
+        if (completed.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, LocalDate> dateBySession = completed.stream()
+                .collect(Collectors.toMap(WorkoutSessionEntity::getId, WorkoutSessionEntity::getSessionDate));
+        List<WorkoutSessionExerciseEntity> rows =
+                exercises.findBySessionIdIn(List.copyOf(dateBySession.keySet()));
+
+        record Dosed(LocalDate date, WorkoutSessionExerciseEntity row) {}
+        Map<String, List<Dosed>> byKey = rows.stream()
+                .map(r -> new Dosed(dateBySession.get(r.getSessionId()), r))
+                .filter(d -> d.date() != null)
+                .collect(Collectors.groupingBy(d -> d.row().getExerciseKey()));
+
+        List<WorkoutStatsResponse.Progression> out = new ArrayList<>();
+        byKey.forEach((key, list) -> {
+            if (list.size() < 2) {
+                return;
+            }
+            List<Dosed> sorted = list.stream().sorted(Comparator.comparing(Dosed::date)).toList();
+            WorkoutSessionExerciseEntity first = sorted.get(0).row();
+            WorkoutSessionExerciseEntity last = sorted.get(sorted.size() - 1).row();
+            if (volumeOf(last) <= volumeOf(first)) {
+                return;
+            }
+            out.add(new WorkoutStatsResponse.Progression(
+                    key, last.getName(), describeDose(first), describeDose(last)));
+        });
+        out.sort(Comparator.comparing(WorkoutStatsResponse.Progression::name));
+        return out;
+    }
+
+    private static int volumeOf(WorkoutSessionExerciseEntity row) {
+        return row.getSets() * row.getReps();
+    }
+
+    /** "3 × 12", or "3 × 30s" where the dose is a duration. */
+    private static String describeDose(WorkoutSessionExerciseEntity row) {
+        String suffix = "sec".equals(row.getUnit()) ? "s" : "";
+        return row.getSets() + " × " + row.getReps() + suffix;
+    }
+
     // ------------------------------------------------------------- reading
 
     private List<WorkoutSessionEntity> recentSessions(long userId, LocalDate today) {
+        return sessionsSince(userId, today, RECENT_WINDOW_DAYS);
+    }
+
+    private List<WorkoutSessionEntity> sessionsSince(long userId, LocalDate today, int days) {
         return sessions.findByUserIdAndSessionDateBetweenOrderBySessionDateAsc(
-                userId, today.minusDays(RECENT_WINDOW_DAYS), today);
+                userId, today.minusDays(days), today);
     }
 
     /**

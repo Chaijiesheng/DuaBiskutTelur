@@ -615,6 +615,28 @@ export default {
     coach: '教练',
     finish: '完成',
 
+    historyTab: '训练',
+    historyEmpty: '还没有训练记录。',
+    historyEmptyHint: '你完成或跳过的训练会显示在这里，和你的餐点并排。',
+    minutesTrained: '训练时长',
+    minutesThisWeek: (n) => `本周 ${n} 分钟`,
+    entryMeta: (minutes, level) => `${minutes} 分钟 · ${level}`,
+    entrySets: (done, total) => `${total} 组中完成 ${done} 组`,
+    chipDone: '✓ 已完成',
+    chipSkipped: '○ 已跳过',
+    chipPartial: '◐ 部分完成',
+    chipPlanned: '○ 已安排',
+
+    analysisHeading: '训练',
+    statConsistency: '坚持度',
+    statConsistencySub: (done, expected) => `计划 ${expected} 次，完成 ${done} 次`,
+    statMinutesLabel: '分钟',
+    statThisMonth: '本月',
+    statBest: (n) => `个人最佳：${n}`,
+    gettingStronger: '越来越强',
+    gettingStrongerEmpty: '再完成几次训练，提升过的动作就会显示在这里。',
+    analysisEmpty: '设置你的训练，就能和餐点一起查看。',
+
     units: {
       reps: '次',
       sec: '秒',

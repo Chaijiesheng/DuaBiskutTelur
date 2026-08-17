@@ -4,6 +4,7 @@ import SignInBanner from './SignInBanner.jsx'
 import WeeklyCaloriesChart, { getWeeklyDays } from './WeeklyCaloriesChart.jsx'
 import WeightTrendCard from './WeightTrendCard.jsx'
 import WaterTrackerCard from './WaterTrackerCard.jsx'
+import WorkoutAnalysisSection from './WorkoutAnalysisSection.jsx'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import { AnalysisSkeleton } from './Skeleton.jsx'
 
@@ -61,6 +62,11 @@ export default function AnalysisScreen({ isVisitor, dailyBudget, goal }) {
           {isVisitor && <SignInBanner />}
         </div>
         <WaterTrackerCard isVisitor={isVisitor} />
+        {/* Also in this branch, not only below it: somebody who trains but has
+            not logged a meal yet has workout figures worth seeing, and hiding
+            them behind "you have no meals" would make training invisible to
+            exactly the person doing it. */}
+        <WorkoutAnalysisSection isVisitor={isVisitor} />
       </div>
     )
   }
@@ -97,6 +103,8 @@ export default function AnalysisScreen({ isVisitor, dailyBudget, goal }) {
       {!isVisitor && <WeightTrendCard goal={goal} />}
 
       <WaterTrackerCard isVisitor={isVisitor} />
+
+      <WorkoutAnalysisSection isVisitor={isVisitor} />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{t('analysis.mealsLogged')}</h2>

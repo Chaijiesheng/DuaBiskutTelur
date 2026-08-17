@@ -8,6 +8,7 @@ import { useHistory } from '../history/HistoryContext.jsx'
 import { GRADE_COLORS } from './GradeReveal.jsx'
 import ResultsScreen from './ResultsScreen.jsx'
 import MenuResultsScreen from './MenuResultsScreen.jsx'
+import WorkoutHistory from './WorkoutHistory.jsx'
 import { ShareGlyph, useShareCard } from './ShareControls.jsx'
 import { buildShareCard } from '../shareCard.js'
 import HistoryEmptyModal from './HistoryEmptyModal.jsx'
@@ -37,9 +38,12 @@ function HistoryList(props) {
   // In the URL so returning from a menu detail lands back on the Menus tab
   // rather than silently resetting to Meals.
   const [searchParams, setSearchParams] = useSearchParams()
-  const mode = searchParams.get('view') === 'menus' ? 'menus' : 'meals'
+  // "meals" stays the bare URL rather than ?view=meals, so every link and
+  // bookmark to /history that predates the other tabs still lands on meals.
+  const requested = searchParams.get('view')
+  const mode = requested === 'menus' || requested === 'workouts' ? requested : 'meals'
   const setMode = (next) =>
-    setSearchParams(next === 'menus' ? { view: 'menus' } : {}, { replace: true })
+    setSearchParams(next === 'meals' ? {} : { view: next }, { replace: true })
 
   const tabClass = (active) =>
     `rounded-lg py-2 text-sm font-semibold transition ${
@@ -50,15 +54,22 @@ function HistoryList(props) {
 
   return (
     <div className="space-y-3 pt-2">
-      <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+      {/* Three tabs now: workouts are the same question as meals and menus —
+          "what did I do" — and answering it in two places means checking two. */}
+      <div className="grid grid-cols-3 gap-2 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
         <button onClick={() => setMode('meals')} className={tabClass(mode === 'meals')}>
           {t('history.mealsTab')}
         </button>
         <button onClick={() => setMode('menus')} className={tabClass(mode === 'menus')}>
           {t('history.menusTab')}
         </button>
+        <button onClick={() => setMode('workouts')} className={tabClass(mode === 'workouts')}>
+          {t('workout.historyTab')}
+        </button>
       </div>
-      {mode === 'meals' ? <MealsHistory {...props} /> : <MenuHistory isVisitor={props.isVisitor} />}
+      {mode === 'meals' && <MealsHistory {...props} />}
+      {mode === 'menus' && <MenuHistory isVisitor={props.isVisitor} />}
+      {mode === 'workouts' && <WorkoutHistory isVisitor={props.isVisitor} />}
     </div>
   )
 }

@@ -618,6 +618,28 @@ export default {
     coach: 'Jurulatih',
     finish: 'Selesai',
 
+    historyTab: 'Senaman',
+    historyEmpty: 'Belum ada senaman direkodkan.',
+    historyEmptyHint: 'Sesi yang anda habiskan atau langkau akan muncul di sini, bersebelahan makanan anda.',
+    minutesTrained: 'Minit berlatih',
+    minutesThisWeek: (n) => `${n} min minggu ini`,
+    entryMeta: (minutes, level) => `${minutes} min · ${level}`,
+    entrySets: (done, total) => `${done} daripada ${total} set`,
+    chipDone: '✓ Selesai',
+    chipSkipped: '○ Dilangkau',
+    chipPartial: '◐ Separuh',
+    chipPlanned: '○ Dirancang',
+
+    analysisHeading: 'Senaman',
+    statConsistency: 'Konsistensi',
+    statConsistencySub: (done, expected) => `${done} daripada ${expected} dirancang`,
+    statMinutesLabel: 'Minit',
+    statThisMonth: 'bulan ini',
+    statBest: (n) => `rekod peribadi: ${n}`,
+    gettingStronger: 'Semakin kuat',
+    gettingStrongerEmpty: 'Habiskan beberapa sesi lagi dan dos yang meningkat akan dipaparkan di sini.',
+    analysisEmpty: 'Sediakan senaman anda untuk melihat latihan bersama makanan anda.',
+
     units: {
       reps: '',
       sec: 'saat',

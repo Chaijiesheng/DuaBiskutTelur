@@ -16,6 +16,16 @@ public interface WorkoutSessionExerciseRepository extends JpaRepository<WorkoutS
     Optional<WorkoutSessionExerciseEntity> findBySessionIdAndPosition(Long sessionId, Integer position);
 
     /**
+     * Every prescribed exercise across a set of sessions, for the "getting
+     * stronger" list on the Analysis tab.
+     *
+     * <p>One query rather than one per session: that list spans a month of
+     * training, so the per-session version would be thirty round trips to build
+     * three rows.
+     */
+    List<WorkoutSessionExerciseEntity> findBySessionIdIn(List<Long> sessionIds);
+
+    /**
      * Account deletion. This table carries no {@code user_id}, so erasure has to
      * reach it through the sessions being deleted — see
      * {@code AccountDataService.deleteAccount}, which is the only thing standing

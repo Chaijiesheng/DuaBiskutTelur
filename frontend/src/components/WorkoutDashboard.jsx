@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
+import { fullWeekdayName } from '../workout/weekday.js'
 
 /**
  * The Workout tab's landing screen — layout variant A, "action first".
@@ -17,7 +18,7 @@ import { useLanguage } from '../i18n/LanguageContext.jsx'
 export default function WorkoutDashboard({
   data, online, onStart, onOpenDetail, onSkip, onUnskip, pendingSets,
 }) {
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
   const [whyOpen, setWhyOpen] = useState(false)
 
   const { session, coach, coachSource, week, stats } = data
@@ -202,9 +203,11 @@ export default function WorkoutDashboard({
               <span className="text-[0.65rem] font-bold text-slate-500 dark:text-slate-400">
                 {day.label}
               </span>
-              {/* The circles are decoration; this is what a screen reader gets. */}
+              {/* The circles are decoration; this is what a screen reader gets.
+                  The full weekday name rather than the narrow letter above it:
+                  "T" is both Tuesday and Thursday. */}
               <span className="sr-only">
-                {day.label} — {t(`workout.dayStates.${day.state}`)}
+                {fullWeekdayName(day.date, lang)} — {t(`workout.dayStates.${day.state}`)}
               </span>
             </li>
           ))}

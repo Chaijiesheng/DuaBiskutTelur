@@ -468,3 +468,19 @@ export function completeWorkoutSession(id, { feel, energy, actualMinutes, lang =
     body: { feel, energy, actualMinutes, lang },
   })
 }
+
+/**
+ * Past sessions for the Workouts tab inside History.
+ *
+ * Deliberately not `fetchWorkoutToday`, even though that returns a week strip:
+ * `/today` plans a session when there isn't one, so reusing it here would mean
+ * opening History created this morning's workout on the way past.
+ */
+export function fetchWorkoutHistory() {
+  return workoutJson('/api/workout/history')
+}
+
+/** Workout figures for the Analysis tab. Read-only, for the same reason. */
+export function fetchWorkoutStats() {
+  return workoutJson('/api/workout/stats')
+}

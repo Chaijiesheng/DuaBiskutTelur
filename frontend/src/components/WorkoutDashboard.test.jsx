@@ -135,13 +135,20 @@ describe('workout dashboard, action-first layout', () => {
     expect(screen.getByText('workout.weekDone:2,4')).toBeTruthy()
   })
 
-  /** The circles are aria-hidden, so each day needs a readable state of its own. */
-  it('announces every day of the week strip', () => {
+  /**
+   * The circles are aria-hidden, so each day needs a readable state of its own,
+   * named by its FULL weekday. The narrow letters shown visually repeat -- "T"
+   * twice, "S" twice -- so announcing those leaves a listener unable to tell
+   * four of the seven columns apart.
+   */
+  it('announces every day of the week strip unambiguously', () => {
     renderDashboard()
 
-    expect(screen.getByText('M — workout.dayStates.done')).toBeTruthy()
-    expect(screen.getByText('F — workout.dayStates.today')).toBeTruthy()
-    expect(screen.getByText('S — workout.dayStates.planned')).toBeTruthy()
+    expect(screen.getByText('Monday — workout.dayStates.done')).toBeTruthy()
+    expect(screen.getByText('Friday — workout.dayStates.today')).toBeTruthy()
+    expect(screen.getByText('Saturday — workout.dayStates.planned')).toBeTruthy()
+    expect(screen.getByText('Tuesday — workout.dayStates.rest')).toBeTruthy()
+    expect(screen.getByText('Thursday — workout.dayStates.rest')).toBeTruthy()
   })
 
   it('shows a skipped session with a way back into it', async () => {

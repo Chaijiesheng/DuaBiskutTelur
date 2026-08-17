@@ -3,8 +3,10 @@ package com.duabiskuttelur.controller;
 import com.duabiskuttelur.model.WorkoutAlternative;
 import com.duabiskuttelur.model.WorkoutCompleteRequest;
 import com.duabiskuttelur.model.WorkoutCompletionResponse;
+import com.duabiskuttelur.model.WorkoutHistoryResponse;
 import com.duabiskuttelur.model.WorkoutProfileRequest;
 import com.duabiskuttelur.model.WorkoutSessionView;
+import com.duabiskuttelur.model.WorkoutStatsResponse;
 import com.duabiskuttelur.model.WorkoutSetRequest;
 import com.duabiskuttelur.model.WorkoutReplaceRequest;
 import com.duabiskuttelur.model.WorkoutTodayResponse;
@@ -63,6 +65,24 @@ public class WorkoutController {
     @GetMapping("/today")
     public WorkoutTodayResponse today(@RequestParam(defaultValue = "en") String lang) {
         return workoutService.today(currentUserId(), lang);
+    }
+
+    /**
+     * The Workouts tab inside History.
+     *
+     * <p>Separate from {@code /today} rather than reusing it, because that one
+     * <em>plans</em> a session when there isn't one — and opening History to
+     * look at last week must not create this morning's workout on the way past.
+     */
+    @GetMapping("/history")
+    public WorkoutHistoryResponse history() {
+        return workoutService.history(currentUserId());
+    }
+
+    /** Workout figures for the Analysis tab. Also read-only, for the same reason. */
+    @GetMapping("/stats")
+    public WorkoutStatsResponse stats() {
+        return workoutService.stats(currentUserId());
     }
 
     @GetMapping("/profile")

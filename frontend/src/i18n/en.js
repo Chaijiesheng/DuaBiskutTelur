@@ -631,6 +631,30 @@ export default {
 
     // Doses. An empty string for reps: "3 × 12" already reads as reps, and
     // "3 × 12 reps" is the kind of redundancy that pushes the line onto two.
+    // History tab — Workouts
+    historyTab: 'Workouts',
+    historyEmpty: 'No workouts logged yet.',
+    historyEmptyHint: 'Sessions you finish or skip show up here, beside your meals.',
+    minutesTrained: 'Minutes trained',
+    minutesThisWeek: (n) => `${n} min this week`,
+    entryMeta: (minutes, level) => `${minutes} min · ${level}`,
+    entrySets: (done, total) => `${done} of ${total} sets`,
+    chipDone: '✓ Done',
+    chipSkipped: '○ Skipped',
+    chipPartial: '◐ Partial',
+    chipPlanned: '○ Planned',
+
+    // Analysis tab — workout figures
+    analysisHeading: 'Workouts',
+    statConsistency: 'Consistency',
+    statConsistencySub: (done, expected) => `${done} of ${expected} planned`,
+    statMinutesLabel: 'Minutes',
+    statThisMonth: 'this month',
+    statBest: (n) => `personal best: ${n}`,
+    gettingStronger: 'Getting stronger',
+    gettingStrongerEmpty: 'Finish a few more sessions and the doses that have gone up will show here.',
+    analysisEmpty: 'Set up your workouts to see training alongside your meals.',
+
     units: {
       reps: '',
       sec: 'sec',
