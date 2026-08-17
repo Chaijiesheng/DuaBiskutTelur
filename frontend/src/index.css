@@ -30,3 +30,55 @@
     animation: stamp-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   The in-session exercise figure (ExerciseFigure.jsx).
+
+   Five poses stacked in one SVG, cross-faded so the rep plays down and back up
+   over 3.2 seconds. Opacity rather than transforms, because each pose is already
+   drawn in its final position — there is nothing to move, only to reveal.
+
+   Eight beats over five poses: 0 1 2 3 4 3 2 1. The percentage pairs snap
+   rather than fade (16.5% then 16.6%) so a pose is either shown or not, which
+   reads as animation instead of a blur of overlapping bodies.
+   --------------------------------------------------------------------------- */
+.rig-frame {
+  opacity: 0;
+}
+.rig-loop .rig-frame {
+  animation-duration: 3.2s;
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
+}
+.rig-loop .rig-p0 { animation-name: rig-beat-0; }
+.rig-loop .rig-p1 { animation-name: rig-beat-1; }
+.rig-loop .rig-p2 { animation-name: rig-beat-2; }
+.rig-loop .rig-p3 { animation-name: rig-beat-3; }
+.rig-loop .rig-p4 { animation-name: rig-beat-4; }
+
+@keyframes rig-beat-0 { 0%, 12.4% { opacity: 1 } 12.5%, 100% { opacity: 0 } }
+@keyframes rig-beat-1 { 0%, 12.4% { opacity: 0 } 12.5%, 24.9% { opacity: 1 } 25%, 87.4% { opacity: 0 } 87.5%, 100% { opacity: 1 } }
+@keyframes rig-beat-2 { 0%, 24.9% { opacity: 0 } 25%, 37.4% { opacity: 1 } 37.5%, 74.9% { opacity: 0 } 75%, 87.4% { opacity: 1 } 87.5%, 100% { opacity: 0 } }
+@keyframes rig-beat-3 { 0%, 37.4% { opacity: 0 } 37.5%, 49.9% { opacity: 1 } 50%, 62.4% { opacity: 0 } 62.5%, 74.9% { opacity: 1 } 75%, 100% { opacity: 0 } }
+@keyframes rig-beat-4 { 0%, 49.9% { opacity: 0 } 50%, 62.4% { opacity: 1 } 62.5%, 100% { opacity: 0 } }
+
+/* Every pose at once, oldest faintest — the How-to sheet's view, and a hold's
+   only view. The shape of the movement without the movement. */
+.rig-all .rig-p0 { opacity: 0.16 }
+.rig-all .rig-p1 { opacity: 0.28 }
+.rig-all .rig-p2 { opacity: 0.44 }
+.rig-all .rig-p3 { opacity: 0.66 }
+.rig-all .rig-p4 { opacity: 1 }
+/* A hold has a single pose, which would otherwise sit at 0.16. */
+.rig-all .rig-p0:only-of-type { opacity: 1 }
+
+/* Reduced motion gets the same information, held still: the loop stops and
+   every pose shows at once, exactly as the How-to sheet does. */
+@media (prefers-reduced-motion: reduce) {
+  .rig-loop .rig-frame { animation: none; }
+  .rig-loop .rig-p0 { opacity: 0.16 }
+  .rig-loop .rig-p1 { opacity: 0.28 }
+  .rig-loop .rig-p2 { opacity: 0.44 }
+  .rig-loop .rig-p3 { opacity: 0.66 }
+  .rig-loop .rig-p4 { opacity: 1 }
+}

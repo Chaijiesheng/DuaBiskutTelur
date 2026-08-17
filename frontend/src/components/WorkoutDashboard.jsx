@@ -82,27 +82,32 @@ export default function WorkoutDashboard({
           data-testid="workout-plan-card"
           className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"
         >
-          <div className="flex items-start justify-between gap-2.5">
-            <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-wide text-grade-aplus dark:text-green-400">
-                {t('workout.kickerToday')}
-              </p>
-              <h3 className="mt-1 text-2xl font-black tracking-tight text-slate-900 dark:text-slate-100">
-                {session.title}
-              </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {t(
-                  'workout.sessionMeta',
-                  session.minutes,
-                  t(`workout.options.${session.level}`),
-                  session.exercises.length,
-                )}
-              </p>
-            </div>
+          {/* Stacked, not a title-and-chip flex row. The chip used to sit top
+              right with `shrink-0`, which meant a long muscle list refused to
+              shrink, forced the card wider than the phone, collapsed the title
+              to one word per line, and pushed the fixed bottom navigation
+              off-screen. A column cannot do that whatever the server sends. */}
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-grade-aplus dark:text-green-400">
+              {t('workout.kickerToday')}
+            </p>
+            <h3 className="mt-1 text-2xl font-black tracking-tight text-slate-900 dark:text-slate-100">
+              {session.title}
+            </h3>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t(
+                'workout.sessionMeta',
+                session.minutes,
+                t(`workout.options.${session.level}`),
+                session.exercises.length,
+              )}
+            </p>
             {session.targetSummary && (
-              <span className="shrink-0 rounded-full bg-green-50 px-2.5 py-1.5 text-[0.7rem] font-extrabold text-grade-aplus dark:bg-green-950/40 dark:text-green-400">
-                {session.targetSummary}
-              </span>
+              <p className="mt-2">
+                <span className="inline-block max-w-full break-words rounded-full bg-green-50 px-2.5 py-1.5 text-[0.7rem] font-extrabold text-grade-aplus dark:bg-green-950/40 dark:text-green-400">
+                  {session.targetSummary}
+                </span>
+              </p>
             )}
           </div>
 

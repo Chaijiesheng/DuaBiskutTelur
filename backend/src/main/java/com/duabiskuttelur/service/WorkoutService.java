@@ -5,6 +5,7 @@ import com.duabiskuttelur.model.WorkoutAlternative;
 import com.duabiskuttelur.model.WorkoutCoachNote;
 import com.duabiskuttelur.model.WorkoutCompleteRequest;
 import com.duabiskuttelur.model.WorkoutCompletionResponse;
+import com.duabiskuttelur.model.WorkoutGlanceResponse;
 import com.duabiskuttelur.model.WorkoutHistoryResponse;
 import com.duabiskuttelur.model.WorkoutProfileRequest;
 import com.duabiskuttelur.model.WorkoutSessionView;
@@ -482,6 +483,35 @@ public class WorkoutService {
     // ------------------------------------------------- history and analysis
 
     /**
+     * One line about today, for the Today card on the Snap tab.
+     *
+     * <p>Reads the stored session and stops. It must never plan one: this is the
+     * app's home screen, so generating here would fire a Gemini call for the
+     * coach note on every user's first open of the day — for a sentence that
+     * lives two taps away and that most of them will never see.
+     */
+    public WorkoutGlanceResponse glance(long userId) {
+        Optional<WorkoutProfile> maybeProfile = profile(userId);
+        if (maybeProfile.isEmpty()) {
+            return new WorkoutGlanceResponse(false, false, null);
+        }
+        LocalDate today = today();
+        boolean trainingDay = isTrainingDay(today, maybeProfile.get());
+
+        return sessions.findByUserIdAndSessionDate(userId, today)
+                .map(s -> {
+                    List<WorkoutSessionExerciseEntity> rows =
+                            exercises.findBySessionIdOrderByPositionAsc(s.getId());
+                    return new WorkoutGlanceResponse(true, trainingDay,
+                            new WorkoutGlanceResponse.Session(
+                                    s.getId(), s.getTitle(), effectiveMinutes(s), s.getStatus(),
+                                    setLogs.findBySessionId(s.getId()).size(),
+                                    rows.stream().mapToInt(WorkoutSessionExerciseEntity::getSets).sum()));
+                })
+                .orElseGet(() -> new WorkoutGlanceResponse(true, trainingDay, null));
+    }
+
+    /**
      * The Workouts tab inside the History screen.
      *
      * <p>Read-only, and separate from {@link #today} on purpose: that method
@@ -772,7 +802,7 @@ public class WorkoutService {
      * three days a week becomes Monday, Wednesday, Friday, not Monday, Tuesday,
      * Wednesday and a four-day gap.
      */
-    private static boolean isTrainingDay(LocalDate day, WorkoutProfile profile) {
+    static boolean isTrainingDay(LocalDate day, WorkoutProfile profile) {
         int days = Math.max(1, Math.min(7, profile.daysPerWeek()));
         if (days >= 7) {
             return true;
@@ -802,16 +832,28 @@ public class WorkoutService {
         doneByPosition.values().forEach(java.util.Collections::sort);
 
         List<WorkoutSessionView.Exercise> views = rows.stream()
-                .map(r -> new WorkoutSessionView.Exercise(
-                        r.getPosition(), r.getExerciseKey(), r.getName(), r.getTarget(),
-                        r.getSets(), r.getReps(), r.getUnit(), r.getCue(),
-                        doneByPosition.getOrDefault(r.getPosition(), List.of())))
+                .map(r -> {
+                    // The prescription comes from the stored row; the reference
+                    // material comes from the catalogue, so improving a warning
+                    // or a video link reaches sessions that already happened.
+                    // A key that has since left the catalogue simply has neither.
+                    Optional<Exercise> catalogued = catalog.byKey(r.getExerciseKey());
+                    return new WorkoutSessionView.Exercise(
+                            r.getPosition(), r.getExerciseKey(), r.getName(), r.getTarget(),
+                            r.getSets(), r.getReps(), r.getUnit(), r.getCue(),
+                            doneByPosition.getOrDefault(r.getPosition(), List.of()),
+                            catalogued.map(e -> e.pattern().tag()).orElse(null),
+                            catalogued.map(Exercise::mistake).orElse(null),
+                            catalogued.map(Exercise::videoUrl).orElse(null));
+                })
                 .toList();
 
         int totalSets = rows.stream().mapToInt(WorkoutSessionExerciseEntity::getSets).sum();
         int completedSets = doneByPosition.values().stream().mapToInt(List::size).sum();
-        String targets = rows.stream().map(WorkoutSessionExerciseEntity::getTarget).distinct()
-                .limit(3).collect(Collectors.joining(" · "));
+        // Short, individual muscle groups -- see WorkoutPlanner.summariseTargets
+        // for why the catalogue's own longer phrasing cannot go in a chip.
+        String targets = WorkoutPlanner.summariseTargets(
+                rows.stream().map(WorkoutSessionExerciseEntity::getTarget).toList());
 
         return new WorkoutSessionView(session.getId(), session.getSessionDate().toString(),
                 session.getTitle(), session.getFocus(), session.getMinutes(), session.getLevel(),

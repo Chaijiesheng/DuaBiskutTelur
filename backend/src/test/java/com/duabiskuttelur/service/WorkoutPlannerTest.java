@@ -296,6 +296,55 @@ class WorkoutPlannerTest {
         }
     }
 
+    // -------------------------------------------------- the muscle-group chip
+
+    /**
+     * The chip stays a chip, for every session the catalogue can build.
+     *
+     * <p>A regression test with a real symptom behind it. Joining the
+     * catalogue's own target phrasing produced
+     * "Legs and Glutes · Chest and Triceps · Glutes and Hamstrings" — 58
+     * characters in a {@code shrink-0} span beside the title, which forced the
+     * card wider than the phone, collapsed "Full Body" to one word per line, and
+     * pushed the fixed bottom navigation off-screen with it.
+     *
+     * <p>The card now stacks the chip on its own line, so this is no longer
+     * defending a pixel budget beside a title — the layout survives any length.
+     * What it still defends is that the chip is a <em>label</em>: three groups
+     * at most, in short form, rather than a sentence that happens to be styled
+     * like a pill. The longest the catalogue can currently produce is
+     * "Upper Back · Lower Back · Rear Shoulders" at 40.
+     */
+    @Test
+    void theTargetChipStaysALabelForEverySessionTheCatalogueCanBuild() {
+        for (Level level : Level.values()) {
+            for (int i = 0; i < 30; i++) {
+                PlannedSession session = planner.plan(47L, MONDAY.plusDays(i),
+                        profile(level, 4, 60, Equipment.GYM, Equipment.DUMBBELLS, Equipment.BANDS),
+                        List.of());
+                String chip = session.targetSummary();
+
+                assertFalse(chip.contains(" and "),
+                        "the chip is repeating the catalogue's long-form phrasing, which is what "
+                                + "broke the card: \"" + chip + "\"");
+                assertTrue(chip.chars().filter(c -> c == '·').count() <= 2,
+                        "the chip lists more than three muscle groups: \"" + chip + "\"");
+                assertTrue(chip.length() <= 48,
+                        "the muscle-group chip has grown into a sentence at " + chip.length()
+                                + " characters: \"" + chip + "\"");
+            }
+        }
+    }
+
+    @Test
+    void theTargetChipSplitsAndDeduplicatesMuscleGroups() {
+        assertEquals("Legs · Glutes · Chest", WorkoutPlanner.summariseTargets(
+                List.of("Legs and Glutes", "Chest and Triceps", "Glutes and Hamstrings")));
+        // A single group survives intact rather than being split on nothing.
+        assertEquals("Core", WorkoutPlanner.summariseTargets(List.of("Core", "Core")));
+        assertEquals("", WorkoutPlanner.summariseTargets(List.of()));
+    }
+
     @Test
     void aSessionAlwaysDescribesWhatItTrains() {
         PlannedSession session = planner.plan(43L, MONDAY,

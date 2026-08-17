@@ -48,6 +48,7 @@ class WorkoutAccessTest {
                 get("/api/workout/profile"),
                 get("/api/workout/history"),
                 get("/api/workout/stats"),
+                get("/api/workout/glance"),
                 post("/api/workout/profile").contentType(MediaType.APPLICATION_JSON).content(JSON),
                 post("/api/workout/sessions/1/start"),
                 put("/api/workout/sessions/1/sets").contentType(MediaType.APPLICATION_JSON).content(JSON),

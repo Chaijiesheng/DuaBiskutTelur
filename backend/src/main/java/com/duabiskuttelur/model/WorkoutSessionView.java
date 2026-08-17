@@ -33,6 +33,20 @@ public record WorkoutSessionView(
      *                     dose differently for each, and a plank shown as
      *                     "30 reps" is wrong in a way no styling fixes.
      * @param completedSets which set indexes are already done, 0-based
+     * @param pattern       the movement pattern, which is what the planner chose
+     *                      this exercise for. The client uses it for the
+     *                      placeholder shown while an exercise has no drawn
+     *                      figure yet — so that placeholder says something true
+     *                      rather than apologising.
+     * @param mistake       the common error for this movement, shown in the
+     *                      How-to sheet. Resolved live from the catalogue rather
+     *                      than frozen into the session: it describes the
+     *                      movement, not the prescription, so improving the
+     *                      wording should reach old sessions too. Null if the
+     *                      exercise has since left the catalogue.
+     * @param videoUrl      a curated YouTube video where one has been picked,
+     *                      and a YouTube search for the exercise otherwise — so
+     *                      the button works everywhere from the first release.
      */
     public record Exercise(
             int position,
@@ -43,7 +57,10 @@ public record WorkoutSessionView(
             int reps,
             String unit,
             String cue,
-            List<Integer> completedSets
+            List<Integer> completedSets,
+            String pattern,
+            String mistake,
+            String videoUrl
     ) {
     }
 }

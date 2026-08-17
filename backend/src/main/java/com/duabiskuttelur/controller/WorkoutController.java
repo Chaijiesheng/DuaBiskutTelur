@@ -3,6 +3,7 @@ package com.duabiskuttelur.controller;
 import com.duabiskuttelur.model.WorkoutAlternative;
 import com.duabiskuttelur.model.WorkoutCompleteRequest;
 import com.duabiskuttelur.model.WorkoutCompletionResponse;
+import com.duabiskuttelur.model.WorkoutGlanceResponse;
 import com.duabiskuttelur.model.WorkoutHistoryResponse;
 import com.duabiskuttelur.model.WorkoutProfileRequest;
 import com.duabiskuttelur.model.WorkoutSessionView;
@@ -83,6 +84,18 @@ public class WorkoutController {
     @GetMapping("/stats")
     public WorkoutStatsResponse stats() {
         return workoutService.stats(currentUserId());
+    }
+
+    /**
+     * One line for the Today card on the Snap tab.
+     *
+     * <p>Read-only like the two above, and more strictly so: this is fetched on
+     * the app's home screen by everybody, so planning here would mean a session
+     * — and a Gemini call — per user per app open.
+     */
+    @GetMapping("/glance")
+    public WorkoutGlanceResponse glance() {
+        return workoutService.glance(currentUserId());
     }
 
     @GetMapping("/profile")

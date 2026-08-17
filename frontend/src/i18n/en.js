@@ -655,6 +655,26 @@ export default {
     gettingStrongerEmpty: 'Finish a few more sessions and the doses that have gone up will show here.',
     analysisEmpty: 'Set up your workouts to see training alongside your meals.',
 
+    // Snap tab — one row on the Today card
+    glanceOpen: 'Open',
+    glancePlanned: 'Planned for today',
+    glanceInProgress: (done, total) => `In progress · ${done} of ${total} sets`,
+    glanceDone: 'Done today',
+    glanceSkipped: 'Skipped today',
+    glanceNotPlanned: 'Training day',
+    glanceNotPlannedTitle: "Today's workout",
+    glanceRestDay: 'Rest day',
+    glanceRestDayTitle: 'No workout planned',
+
+    // Exercise demonstration
+    howTo: 'ⓘ How',
+    doThis: 'Do this',
+    commonMistake: 'Common mistake',
+    watchVideo: 'Watch on YouTube',
+    watchVideoNote: 'Opens outside the app. Your logged sets are already saved.',
+    watchVideoOffline: 'The video needs a connection. Everything else here works offline.',
+    close: 'Close',
+
     units: {
       reps: '',
       sec: 'sec',

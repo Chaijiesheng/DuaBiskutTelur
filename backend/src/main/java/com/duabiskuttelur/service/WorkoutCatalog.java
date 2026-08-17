@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,8 +45,8 @@ public class WorkoutCatalog {
     private static final Logger log = LoggerFactory.getLogger(WorkoutCatalog.class);
     private static final String RESOURCE = "workout/exercises.csv";
 
-    /** key, name, pattern, target, equipment, level, unit, base_reps, cue. */
-    private static final int FIELDS = 9;
+    /** key, name, pattern, target, equipment, level, unit, base_reps, cue, youtube_id, mistake. */
+    private static final int FIELDS = 11;
 
     /**
      * Movement patterns, in the order a session reads best: legs before push
@@ -121,10 +122,56 @@ public class WorkoutCatalog {
         public String tag() { return name().toLowerCase(Locale.ROOT); }
     }
 
-    /** One row of the table. Immutable, and copied into a session at generation time. */
+    /**
+     * One row of the table. Immutable.
+     *
+     * <p>{@code name}, {@code target}, {@code unit}, {@code baseReps} and
+     * {@code cue} are copied into a session when it is generated — they are the
+     * prescription, and editing this file must not rewrite what a past session
+     * says the user was asked to do.
+     *
+     * <p>{@code youtubeId} and {@code mistake} are deliberately <em>not</em>
+     * copied. They are reference material about the movement rather than part of
+     * the prescription, so improving a link or rewriting a warning should reach
+     * every session that ever used the exercise, including old ones. They are
+     * resolved from here by {@code exercise_key} at read time.
+     *
+     * @param youtubeId usually empty — see the file header. Empty means the app
+     *                  links to a YouTube search instead, which always resolves.
+     */
     public record Exercise(String key, String name, Pattern pattern, String target,
-                           Equipment equipment, Level level, Unit unit, int baseReps, String cue) {
+                           Equipment equipment, Level level, Unit unit, int baseReps, String cue,
+                           String youtubeId, String mistake) {
+
+        /**
+         * Where "Watch on YouTube" goes.
+         *
+         * <p>A curated video when somebody has picked one, and a YouTube search
+         * for the exercise name when nobody has yet. That fallback is what makes
+         * the button work on all 59 rows from the first release rather than on
+         * the handful that have been curated — and a search that returns
+         * something merely adequate still beats a button that does nothing.
+         *
+         * <p>The id is validated rather than trusted: YouTube ids are 11
+         * characters of a known alphabet, so a truncated or commented value in
+         * the CSV falls back to search instead of building a link to nowhere.
+         */
+        public String videoUrl() {
+            if (youtubeId != null && YOUTUBE_ID.matcher(youtubeId).matches()) {
+                return "https://www.youtube.com/watch?v=" + youtubeId;
+            }
+            return "https://www.youtube.com/results?search_query="
+                    + URLEncoder.encode(name + " exercise form", StandardCharsets.UTF_8);
+        }
+
+        /** True when a human has picked the video, rather than the app guessing via search. */
+        public boolean hasCuratedVideo() {
+            return youtubeId != null && YOUTUBE_ID.matcher(youtubeId).matches();
+        }
     }
+
+    private static final java.util.regex.Pattern YOUTUBE_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_-]{11}");
 
     private List<Exercise> exercises = List.of();
 
@@ -200,7 +247,8 @@ public class WorkoutCatalog {
                 return Optional.empty();
             }
             return Optional.of(new Exercise(f[0].trim(), f[1].trim(), pattern, f[3].trim(),
-                    equipment.get(), level.get(), unit, Integer.parseInt(f[7].trim()), f[8].trim()));
+                    equipment.get(), level.get(), unit, Integer.parseInt(f[7].trim()), f[8].trim(),
+                    f[9].trim(), f[10].trim()));
         } catch (NumberFormatException e) {
             log.warn("Skipping exercise row with unparseable base_reps: {}", line);
             return Optional.empty();

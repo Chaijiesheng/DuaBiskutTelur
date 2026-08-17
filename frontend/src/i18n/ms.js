@@ -640,6 +640,24 @@ export default {
     gettingStrongerEmpty: 'Habiskan beberapa sesi lagi dan dos yang meningkat akan dipaparkan di sini.',
     analysisEmpty: 'Sediakan senaman anda untuk melihat latihan bersama makanan anda.',
 
+    glanceOpen: 'Buka',
+    glancePlanned: 'Dirancang untuk hari ini',
+    glanceInProgress: (done, total) => `Sedang berjalan · ${done} daripada ${total} set`,
+    glanceDone: 'Selesai hari ini',
+    glanceSkipped: 'Dilangkau hari ini',
+    glanceNotPlanned: 'Hari latihan',
+    glanceNotPlannedTitle: 'Senaman hari ini',
+    glanceRestDay: 'Hari rehat',
+    glanceRestDayTitle: 'Tiada senaman dirancang',
+
+    howTo: 'ⓘ Cara',
+    doThis: 'Buat begini',
+    commonMistake: 'Kesilapan biasa',
+    watchVideo: 'Tonton di YouTube',
+    watchVideoNote: 'Dibuka di luar aplikasi. Set yang anda catat sudah disimpan.',
+    watchVideoOffline: 'Video perlukan sambungan. Semua yang lain di sini berfungsi luar talian.',
+    close: 'Tutup',
+
     units: {
       reps: '',
       sec: 'saat',

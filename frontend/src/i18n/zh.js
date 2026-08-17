@@ -637,6 +637,24 @@ export default {
     gettingStrongerEmpty: '再完成几次训练，提升过的动作就会显示在这里。',
     analysisEmpty: '设置你的训练，就能和餐点一起查看。',
 
+    glanceOpen: '打开',
+    glancePlanned: '今天已安排',
+    glanceInProgress: (done, total) => `进行中 · ${total} 组中完成 ${done} 组`,
+    glanceDone: '今天已完成',
+    glanceSkipped: '今天已跳过',
+    glanceNotPlanned: '训练日',
+    glanceNotPlannedTitle: '今天的训练',
+    glanceRestDay: '休息日',
+    glanceRestDayTitle: '今天没有安排训练',
+
+    howTo: 'ⓘ 怎么做',
+    doThis: '这样做',
+    commonMistake: '常见错误',
+    watchVideo: '在 YouTube 观看',
+    watchVideoNote: '将在应用外打开。你已记录的组数都已保存。',
+    watchVideoOffline: '视频需要联网。这里其他内容离线也能用。',
+    close: '关闭',
+
     units: {
       reps: '次',
       sec: '秒',

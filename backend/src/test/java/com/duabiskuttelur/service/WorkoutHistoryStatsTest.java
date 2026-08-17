@@ -98,6 +98,107 @@ class WorkoutHistoryStatsTest {
                         + "must not plan today's workout");
     }
 
+    // --------------------------------------------------------------- glance
+
+    /**
+     * The strictest version of the same rule. This one runs on the app's home
+     * screen for everybody, so planning here would fire a Gemini call for the
+     * coach note on every user's first open of the day.
+     */
+    @Test
+    void theSnapRowNeverPlansAWorkoutEither() {
+        service.saveProfile(USER, onboarding());
+
+        service.glance(USER);
+
+        assertEquals(0, sessions.findAll().size(),
+                "the Snap tab's Today row planned a session — that is a model call "
+                        + "per user per app open, for a sentence two taps away");
+    }
+
+    @Test
+    void theSnapRowSaysNothingBeforeOnboarding() {
+        var glance = service.glance(USER);
+
+        assertFalse(glance.hasProfile());
+        assertEquals(null, glance.session());
+    }
+
+    /**
+     * With no stored session, "you have not opened the Workout tab yet" and
+     * "today is a rest day" are the same absence in the database. Without
+     * {@code trainingDay} the row would either nag on a rest day or let a
+     * training day pass in silence.
+     */
+    @Test
+    void theSnapRowDistinguishesAnUnopenedTrainingDayFromARestDay() {
+        service.saveProfile(USER, new WorkoutProfileRequest(
+                "maintain", "beginner", 7, 30, List.of("none"), List.of()));
+
+        assertTrue(service.glance(USER).trainingDay(),
+                "training every day should be a training day whatever today is");
+        assertEquals(null, service.glance(USER).session(), "nothing has been planned yet");
+    }
+
+    /**
+     * The rotation itself, on fixed dates rather than on "today".
+     *
+     * <p>Asserted here rather than through {@code glance} because the answer
+     * depends on the day of the week, and a test that reads the clock would pass
+     * six days out of seven.
+     */
+    @Test
+    void theRotationSpreadsTrainingDaysAcrossTheWeek() {
+        LocalDate monday = LocalDate.of(2026, 8, 17);
+        WorkoutProfile threeDays = new WorkoutProfile(
+                Goal.MAINTAIN, Level.BEGINNER, 3, 30, Set.of(Equipment.NONE), Set.of());
+        WorkoutProfile everyDay = new WorkoutProfile(
+                Goal.MAINTAIN, Level.BEGINNER, 7, 30, Set.of(Equipment.NONE), Set.of());
+
+        int trainingDays = 0;
+        for (int i = 0; i < 7; i++) {
+            if (WorkoutService.isTrainingDay(monday.plusDays(i), threeDays)) {
+                trainingDays++;
+            }
+            assertTrue(WorkoutService.isTrainingDay(monday.plusDays(i), everyDay),
+                    "a 7-day plan called " + monday.plusDays(i).getDayOfWeek() + " a rest day");
+        }
+
+        assertEquals(3, trainingDays, "a 3-day plan should mark exactly three days of the week");
+        assertTrue(WorkoutService.isTrainingDay(monday, threeDays),
+                "the week should start with a training day rather than a rest day");
+    }
+
+    @Test
+    void theSnapRowReportsAnExistingSessionAndItsProgress() {
+        service.saveProfile(USER, onboarding());
+        WorkoutSessionView session = service.today(USER, "en").session();
+        service.logSet(USER, session.id(), 0, 0, true);
+
+        var glance = service.glance(USER);
+
+        assertTrue(glance.hasProfile());
+        assertEquals(session.id(), glance.session().id());
+        // The session's own title, not a hardcoded one: which focus today lands
+        // on is a function of the date, so asserting "Full Body" here passed on
+        // one day in three and failed on the other two.
+        assertEquals(session.title(), glance.session().title());
+        assertFalse(glance.session().title().isBlank());
+        assertEquals("in_progress", glance.session().status());
+        assertEquals(1, glance.session().completedSets());
+        assertEquals(session.totalSets(), glance.session().totalSets());
+    }
+
+    @Test
+    void theSnapRowNeverLeaksAnotherUsersSession() {
+        service.saveProfile(OTHER_USER, onboarding());
+        service.today(OTHER_USER, "en");
+        service.saveProfile(USER, onboarding());
+
+        assertEquals(null, service.glance(USER).session(),
+                "one user's Today row showed another user's session");
+    }
+
     @Test
     void historyIsEmptyButWellFormedForSomeoneWhoHasNeverTrained() {
         WorkoutHistoryResponse response = service.history(USER);

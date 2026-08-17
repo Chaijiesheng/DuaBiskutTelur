@@ -484,3 +484,15 @@ export function fetchWorkoutHistory() {
 export function fetchWorkoutStats() {
   return workoutJson('/api/workout/stats')
 }
+
+/**
+ * One line about today's training, for the Today card on the Snap tab.
+ *
+ * The lightest of the three workout reads, and the one that matters most that
+ * it stays read-only: this runs on the app's home screen for everybody, and
+ * `/api/workout/today` would plan a session — and make a Gemini call for the
+ * coach note — on every user's first open of the day.
+ */
+export function fetchWorkoutGlance() {
+  return workoutJson('/api/workout/glance')
+}

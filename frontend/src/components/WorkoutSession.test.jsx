@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,6 +24,9 @@ function exercise(position, name, sets, completedSets = []) {
     unit: 'reps',
     cue: `Cue for ${name}`,
     completedSets,
+    pattern: 'squat',
+    mistake: `Mistake for ${name}`,
+    videoUrl: 'https://www.youtube.com/results?search_query=Squat+exercise+form',
   }
 }
 
@@ -124,6 +127,69 @@ describe('workout session, set-led runner', () => {
 
     expect(screen.getByText(/workout\.offlineBody/)).toBeTruthy()
     expect(screen.getByText(/workout\.unsynced:2/)).toBeTruthy()
+  })
+})
+
+describe('the how-to sheet', () => {
+  it('opens from the demonstration panel', async () => {
+    renderSession([exercise(0, 'Squat', 3)])
+
+    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+
+    // Scoped to the sheet: the cue is also on the screen underneath, which the
+    // sheet covers. Both showing it is correct — only one is ever visible.
+    const sheet = screen.getByRole('dialog', { name: 'Squat' })
+    expect(within(sheet).getByText('Cue for Squat')).toBeTruthy()
+    expect(within(sheet).getByText('Mistake for Squat')).toBeTruthy()
+    expect(within(sheet).getByText('workout.doThis')).toBeTruthy()
+  })
+
+  /**
+   * The one link in the app that leaves the app. It opens in a new tab, and
+   * noreferrer as well as noopener — the referrer would otherwise tell YouTube
+   * which screen of a health app the person tapped it from.
+   */
+  it('links out to the video safely', async () => {
+    renderSession([exercise(0, 'Squat', 3)])
+    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+
+    const link = screen.getByRole('link', { name: /workout\.watchVideo/ })
+    expect(link.getAttribute('href')).toContain('youtube.com')
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toContain('noopener')
+    expect(link.getAttribute('rel')).toContain('noreferrer')
+  })
+
+  /** A link that cannot work must say why rather than failing after the tap. */
+  it('explains the video is unavailable offline instead of offering a dead link', async () => {
+    renderSession([exercise(0, 'Squat', 3)], { online: false })
+    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+
+    expect(screen.queryByRole('link', { name: /workout\.watchVideo/ })).toBeNull()
+    expect(screen.getByText('workout.watchVideoOffline')).toBeTruthy()
+  })
+
+  it('closes without touching the session', async () => {
+    const { onLogSet } = renderSession([exercise(0, 'Squat', 3)])
+    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'workout.close' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Squat' })).toBeNull()
+    expect(onLogSet).not.toHaveBeenCalled()
+    expect(screen.getByText('workout.setOf:1,3')).toBeTruthy()
+  })
+
+  /** An exercise the catalogue no longer knows has no reference material at all. */
+  it('omits the sections it has nothing to put in', async () => {
+    const bare = { ...exercise(0, 'Squat', 3), mistake: null, videoUrl: null }
+    renderSession([bare])
+    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+
+    const sheet = screen.getByRole('dialog', { name: 'Squat' })
+    expect(within(sheet).queryByText('workout.commonMistake')).toBeNull()
+    expect(within(sheet).queryByRole('link', { name: /workout\.watchVideo/ })).toBeNull()
+    expect(within(sheet).getByText('Cue for Squat')).toBeTruthy()
   })
 })
 

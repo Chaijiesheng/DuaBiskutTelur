@@ -58,6 +58,71 @@ class WorkoutCatalogTest {
         }
     }
 
+    /**
+     * The How-to sheet shows this under the cue, so a blank one leaves a labelled
+     * empty section — and the mistake is the half of the instruction the cue
+     * cannot carry: the cue says what to do, this says what goes wrong.
+     */
+    @Test
+    void everyRowNamesTheMistakeThatRuinsIt() {
+        for (Exercise e : catalog.all()) {
+            assertFalse(e.mistake() == null || e.mistake().isBlank(),
+                    e.key() + " has no common-mistake line, so its How-to sheet has an empty section");
+            assertFalse(e.mistake().equals(e.cue()),
+                    e.key() + " repeats its cue as the mistake; the sheet would say the same thing twice");
+        }
+    }
+
+    /**
+     * The promise that made shipping before the curation work acceptable: the
+     * button works on every row from the first release, because an empty id
+     * falls back to a search rather than to nothing.
+     */
+    @Test
+    void everyRowHasAWorkingVideoLinkEvenWithNoCuratedId() {
+        for (Exercise e : catalog.all()) {
+            String url = e.videoUrl();
+            assertTrue(url.startsWith("https://www.youtube.com/"),
+                    e.key() + " produced a link that does not go to YouTube: " + url);
+            assertFalse(url.endsWith("v=") || url.endsWith("search_query="),
+                    e.key() + " produced an empty link: " + url);
+        }
+    }
+
+    /**
+     * A half-typed or commented-out id must not become a link to nowhere. The
+     * search fallback is the safe answer for anything that is not a real id.
+     */
+    @Test
+    void anIdThatIsNotAYoutubeIdFallsBackToSearch() {
+        Exercise curated = sample("aBcD1234_-x");
+        Exercise truncated = sample("dQw4w9");
+        Exercise commented = sample("# not yet");
+        Exercise empty = sample("");
+
+        assertTrue(curated.videoUrl().contains("watch?v=aBcD1234_-x"));
+        assertTrue(curated.hasCuratedVideo());
+        for (Exercise bad : List.of(truncated, commented, empty)) {
+            assertTrue(bad.videoUrl().contains("results?search_query="),
+                    "'" + bad.youtubeId() + "' should have fallen back to a search");
+            assertFalse(bad.hasCuratedVideo());
+        }
+    }
+
+    /** Exercise names contain spaces, so the search fallback has to encode them. */
+    @Test
+    void theSearchFallbackEncodesTheExerciseName() {
+        String url = sample("").videoUrl();
+
+        assertFalse(url.contains(" "), "an unencoded space would break the link: " + url);
+        assertTrue(url.contains("Bulgarian"), "the exercise name never reached the search: " + url);
+    }
+
+    private static Exercise sample(String youtubeId) {
+        return new Exercise("sample", "Bulgarian Split Squat", Pattern.SQUAT, "Legs",
+                Equipment.NONE, Level.BEGINNER, WorkoutCatalog.Unit.REPS, 10, "Cue.", youtubeId, "Mistake.");
+    }
+
     @Test
     void everyKeyIsUnique() {
         Set<String> keys = catalog.all().stream().map(Exercise::key).collect(Collectors.toSet());

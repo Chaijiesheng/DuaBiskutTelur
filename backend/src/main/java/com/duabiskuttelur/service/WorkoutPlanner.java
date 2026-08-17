@@ -9,12 +9,14 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Builds one day's session from the catalogue. Deterministic, and that is the
@@ -75,15 +77,42 @@ public class WorkoutPlanner {
             exercises = List.copyOf(exercises);
         }
 
-        /** "Chest and Triceps · Legs and Glutes · Core" — the chip under the title. */
+        /** "Legs · Glutes · Chest" — the chip under the title. */
         public String targetSummary() {
-            return exercises.stream().map(p -> p.exercise().target()).distinct()
-                    .limit(3).reduce((a, b) -> a + " · " + b).orElse("");
+            return summariseTargets(exercises.stream().map(p -> p.exercise().target()).toList());
         }
 
         public int totalSets() {
             return exercises.stream().mapToInt(PlannedExercise::sets).sum();
         }
+    }
+
+    /**
+     * The muscle-group chip shown under a session title.
+     *
+     * <p>Individual groups, not the catalogue's own phrasing. A row's target
+     * reads "Legs and Glutes", which is right underneath an exercise name and
+     * far too long three-to-a-chip: joining three of them produced
+     * "Legs and Glutes · Chest and Triceps · Glutes and Hamstrings", 58
+     * characters, which on a real phone pushed the card wider than the screen
+     * and took the fixed bottom navigation off-screen with it.
+     *
+     * <p>Capped at three for the same reason. A chip whose width depends on how
+     * many muscle groups a session happens to touch is a layout waiting to break
+     * on somebody else's phone rather than on ours.
+     *
+     * <p>Shared by {@link PlannedSession} and {@code WorkoutService.view} so the
+     * chip means the same thing whether a session was just planned or read back
+     * from the database.
+     */
+    public static String summariseTargets(List<String> targets) {
+        return targets.stream()
+                .flatMap(target -> Arrays.stream(target.split("(?i)\\s+and\\s+")))
+                .map(String::trim)
+                .filter(part -> !part.isEmpty())
+                .distinct()
+                .limit(3)
+                .collect(Collectors.joining(" · "));
     }
 
     /**

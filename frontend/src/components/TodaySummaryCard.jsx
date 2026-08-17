@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { estimateProteinTarget } from '../calorieCalculator.js'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
+import WorkoutTodayRow from './WorkoutTodayRow.jsx'
 
 /** Sums an in-memory visitor history down to today's (local calendar day) totals. */
 function computeVisitorToday(entries) {
@@ -75,6 +76,9 @@ export default function TodaySummaryCard({ isVisitor, dashboard, visitorEntries,
           style={{ width: `${Math.min(100, percent)}%`, background: barColor }}
         />
       </div>
+      {/* The only addition to this screen: one row, under a divider. Visitors
+          have no plan to show and no session to fetch with. */}
+      {!isVisitor && <WorkoutTodayRow />}
     </section>
   )
 }

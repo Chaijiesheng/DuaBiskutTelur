@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchWorkoutAlternatives } from '../api.js'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
+import ExerciseFigure from './ExerciseFigure.jsx'
 
 /**
  * The in-workout runner — variant A, "set led".
@@ -34,6 +35,7 @@ export default function WorkoutSession({
   const [resting, setResting] = useState(false)
   const [restLeft, setRestLeft] = useState(REST_SECONDS)
   const [replaceOpen, setReplaceOpen] = useState(false)
+  const [howToOpen, setHowToOpen] = useState(false)
 
   const exercise = exercises[Math.min(cursor.exercise, exercises.length - 1)]
   const setIndex = Math.min(cursor.set, exercise.sets - 1)
@@ -139,6 +141,19 @@ export default function WorkoutSession({
       </h2>
       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{exercise.target}</p>
 
+      {/* The demonstration. Tapping anywhere on it opens the How-to sheet — the
+          chip is a visible affordance for that, not a separate target. */}
+      <button
+        type="button"
+        onClick={() => setHowToOpen(true)}
+        className="relative mt-4 flex h-[9.25rem] w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60"
+      >
+        <ExerciseFigure exerciseKey={exercise.key} pattern={exercise.pattern} />
+        <span className="absolute bottom-2 right-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[0.7rem] font-bold text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          {t('workout.howTo')}
+        </span>
+      </button>
+
       <div className="mt-4 flex items-baseline justify-between">
         <p className="text-5xl font-black leading-none tracking-tighter text-slate-900 dark:text-slate-100">
           {exercise.reps}
@@ -232,6 +247,10 @@ export default function WorkoutSession({
           onAdd={() => setRestLeft((left) => left + REST_BONUS_SECONDS)}
           onSkip={stopRest}
         />
+      )}
+
+      {howToOpen && (
+        <HowToSheet exercise={exercise} online={online} onClose={() => setHowToOpen(false)} />
       )}
 
       {replaceOpen && (
@@ -429,6 +448,98 @@ function ReplaceSheet({ sessionId, exercise, onClose, onConfirm }) {
           className="w-full py-3 text-xs font-semibold text-slate-500 dark:text-slate-400"
         >
           {t('workout.replaceKeep')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The How-to sheet.
+ *
+ * <p>Everything wordier than a glance lives here rather than on the session
+ * screen: the full movement, what to do, what usually goes wrong, and the way
+ * out to a video. Mid-set you want one number and one button; between sets you
+ * might want all of this.
+ *
+ * <p>The video link is the only thing in the app that leaves the app. It gets a
+ * deliberate second tap and a line saying nothing is lost — which is true,
+ * because sets are logged the moment they're tapped and queue offline when they
+ * can't be.
+ */
+function HowToSheet({ exercise, online, onClose }) {
+  const { t } = useLanguage()
+  const unit = t(`workout.units.${exercise.unit}`)
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={exercise.name}
+      className="fixed inset-0 z-30 mx-auto flex max-w-md items-end bg-slate-900/50"
+    >
+      <div className="max-h-[88vh] w-full overflow-y-auto rounded-t-3xl bg-white px-4 pb-6 pt-5 dark:bg-slate-800">
+        <div aria-hidden="true" className="mx-auto mb-3.5 h-1 w-9 rounded-full bg-slate-200 dark:bg-slate-600" />
+        <h3 className="text-xl font-black tracking-tight text-slate-900 dark:text-slate-100">
+          {exercise.name}
+        </h3>
+        <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+          {exercise.target} · {t('workout.scheme', exercise.sets, exercise.reps, unit)}
+        </p>
+
+        {/* Every pose at once — the shape of the whole movement, held still. */}
+        <div className="mt-3 flex h-40 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60">
+          <ExerciseFigure exerciseKey={exercise.key} pattern={exercise.pattern} variant="all" />
+        </div>
+
+        {exercise.cue && (
+          <div className="mt-4">
+            <p className="text-[0.65rem] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {t('workout.doThis')}
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-700 dark:text-slate-200">{exercise.cue}</p>
+          </div>
+        )}
+
+        {exercise.mistake && (
+          <div className="mt-3.5">
+            <p className="text-[0.65rem] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {t('workout.commonMistake')}
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-700 dark:text-slate-200">{exercise.mistake}</p>
+          </div>
+        )}
+
+        {exercise.videoUrl && online && (
+          <>
+            <a
+              href={exercise.videoUrl}
+              target="_blank"
+              // noreferrer as well as noopener: this is an outbound link from a
+              // health app, and the referrer would tell YouTube which screen of
+              // which app the person was on when they tapped it.
+              rel="noopener noreferrer"
+              className="mt-4 flex min-h-[3rem] items-center justify-center gap-2 rounded-xl border-2 border-slate-200 text-sm font-bold text-blue-700 dark:border-slate-700 dark:text-blue-300"
+            >
+              ▶ {t('workout.watchVideo')}
+            </a>
+            <p className="mt-1.5 text-center text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+              {t('workout.watchVideoNote')}
+            </p>
+          </>
+        )}
+        {exercise.videoUrl && !online && (
+          <p className="mt-4 rounded-xl bg-slate-100 px-3 py-2.5 text-center text-xs font-semibold text-slate-500 dark:bg-slate-700 dark:text-slate-400">
+            {t('workout.watchVideoOffline')}
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-4 min-h-[3rem] w-full rounded-xl border border-slate-200 text-sm font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300"
+        >
+          {t('workout.close')}
         </button>
       </div>
     </div>
