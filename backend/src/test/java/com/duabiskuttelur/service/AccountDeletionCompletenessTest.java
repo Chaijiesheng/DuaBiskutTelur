@@ -10,6 +10,8 @@ import com.duabiskuttelur.persistence.WaterEntity;
 import com.duabiskuttelur.persistence.WaterRepository;
 import com.duabiskuttelur.persistence.WeightEntity;
 import com.duabiskuttelur.persistence.WeightRepository;
+import com.duabiskuttelur.persistence.WorkoutProfileRepository;
+import com.duabiskuttelur.persistence.WorkoutSessionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -71,7 +74,23 @@ class AccountDeletionCompletenessTest {
      * exemption here.
      */
     private static final Set<String> USER_SCOPED_TABLES = Set.of(
-            "MEAL_ANALYSIS", "MENU_SCAN", "WATER_ENTRY", "WEIGHT_ENTRY");
+            "MEAL_ANALYSIS", "MENU_SCAN", "WATER_ENTRY", "WEIGHT_ENTRY",
+            "WORKOUT_PROFILE", "WORKOUT_SESSION");
+
+    /**
+     * User data that the sweep above <em>cannot</em> see, because it carries no
+     * {@code user_id} of its own -- it is keyed to a workout session, which is
+     * keyed to the user.
+     *
+     * <p>This is the hole the schema query leaves, and it is not hypothetical:
+     * every set somebody logged and every exercise they were prescribed lives in
+     * these two tables. Deleting only the rows that name a user directly would
+     * leave a complete record of somebody's training behind, findable by session
+     * id, after they asked to be erased. There is no foreign key to cascade
+     * through, so {@code WorkoutService.deleteAllForUser} has to walk it.
+     */
+    private static final Set<String> SESSION_SCOPED_TABLES = Set.of(
+            "WORKOUT_SESSION_EXERCISE", "WORKOUT_SET_LOG");
 
     @Autowired private DataSource dataSource;
     @Autowired private AccountDataService accountDataService;
@@ -80,6 +99,9 @@ class AccountDeletionCompletenessTest {
     @Autowired private MenuScanRepository menuScanRepository;
     @Autowired private WaterRepository waterRepository;
     @Autowired private WeightRepository weightRepository;
+    @Autowired private WorkoutService workoutService;
+    @Autowired private WorkoutProfileRepository workoutProfileRepository;
+    @Autowired private WorkoutSessionRepository workoutSessionRepository;
 
     private UserEntity leaving;
     private UserEntity staying;
@@ -90,6 +112,8 @@ class AccountDeletionCompletenessTest {
         menuScanRepository.deleteAll();
         waterRepository.deleteAll();
         weightRepository.deleteAll();
+        workoutSessionRepository.deleteAll();
+        workoutProfileRepository.deleteAll();
         userRepository.deleteAll();
 
         leaving = newUser("leaving-sub");
@@ -138,6 +162,60 @@ class AccountDeletionCompletenessTest {
         weight.setWeightKg(70.5);
         weight.setLoggedAt(Instant.now());
         weightRepository.save(weight);
+
+        // Through the service rather than the repositories, so the fixture gets a
+        // real session with real exercises and a real logged set -- the child
+        // rows are the point of SESSION_SCOPED_TABLES below, and hand-built
+        // parents would be free to have none.
+        workoutService.saveProfile(userId, new com.duabiskuttelur.model.WorkoutProfileRequest(
+                "maintain", "beginner", 3, 30, List.of("none"), List.of()));
+        long sessionId = workoutService.today(userId, "en").session().id();
+        workoutService.logSet(userId, sessionId, 0, 0, true);
+    }
+
+    /**
+     * The gap the schema sweep cannot cover. Asked of the live schema in the same
+     * spirit: these are the base tables with no {@code user_id} that nonetheless
+     * hold user data, and they must end up empty too.
+     */
+    @Test
+    void deletingAnAccountAlsoClearsTheTablesThatDoNotNameTheUser() throws SQLException {
+        Long leavingId = leaving.getId();
+        Map<String, Integer> before = sessionScopedCountsFor(leavingId);
+        assertTrue(before.values().stream().allMatch(count -> count > 0),
+                "the fixture must reach every session-scoped table, otherwise this passes vacuously: "
+                        + before);
+
+        accountDataService.deleteAccount(leaving);
+
+        assertEquals(Map.of(), nonEmpty(sessionScopedCountsFor(leavingId)),
+                "these tables still hold the deleted account's training record, reachable by session id");
+        assertTrue(sessionScopedCountsFor(staying.getId()).values().stream().allMatch(c -> c > 0),
+                "the other account lost its training record to a delete that was not theirs");
+    }
+
+    /** Rows in the session-scoped tables belonging to one user, counted via their sessions. */
+    private Map<String, Integer> sessionScopedCountsFor(Long userId) throws SQLException {
+        List<Long> sessionIds = workoutSessionRepository.findIdsByUserId(userId);
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        try (Connection conn = dataSource.getConnection()) {
+            for (String table : new TreeSet<>(SESSION_SCOPED_TABLES)) {
+                int total = 0;
+                for (Long sessionId : sessionIds) {
+                    // The table name is a constant in this file, not input.
+                    try (PreparedStatement st = conn.prepareStatement(
+                            "SELECT COUNT(*) FROM " + table + " WHERE session_id = ?")) {
+                        st.setLong(1, sessionId);
+                        try (ResultSet rs = st.executeQuery()) {
+                            rs.next();
+                            total += rs.getInt(1);
+                        }
+                    }
+                }
+                counts.put(table, total);
+            }
+        }
+        return counts;
     }
 
     /**

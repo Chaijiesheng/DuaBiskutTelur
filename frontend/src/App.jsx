@@ -7,6 +7,7 @@ import AnalyzingScreen from './components/AnalyzingScreen.jsx'
 import ResultsScreen from './components/ResultsScreen.jsx'
 import MenuResultsScreen from './components/MenuResultsScreen.jsx'
 import HistoryScreen from './components/HistoryScreen.jsx'
+import WorkoutScreen from './components/WorkoutScreen.jsx'
 import AnalysisScreen from './components/AnalysisScreen.jsx'
 import ProfilePage from './components/ProfilePage.jsx'
 import ErrorScreen from './components/ErrorScreen.jsx'
@@ -34,6 +35,7 @@ import { LanguageProvider, useLanguage } from './i18n/LanguageContext.jsx'
 import { ThemeProvider } from './theme/ThemeContext.jsx'
 import { setUpdateGateBusy } from './swUpdateGate.js'
 import { HistoryProvider } from './history/HistoryContext.jsx'
+import { WorkoutProvider } from './workout/WorkoutContext.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 
 const DEFAULT_BUDGET = 2000
@@ -62,6 +64,7 @@ export default function App() {
 
 /** Which bottom-tab is lit for a given path. Detail views stay under their tab. */
 function activeTabFor(pathname) {
+  if (pathname.startsWith('/workout')) return 'workout'
   if (pathname.startsWith('/history')) return 'history'
   if (pathname.startsWith('/analysis')) return 'analysis'
   if (pathname.startsWith('/profile')) return 'profile'
@@ -76,6 +79,10 @@ function AppShell() {
   // makes the Android hardware back button (and browser back, and a bookmarked
   // link) work at all — previously it was React state, so back exited the app.
   const tab = activeTabFor(pathname)
+  // Everything not needed mid-set is gone while a workout is running, the tab
+  // bar included. That is not styling: a row of other destinations at the bottom
+  // of the screen is an invitation to leave a session you are three sets into.
+  const inSession = pathname.startsWith('/workout/session')
   const [ready, setReady] = useState(false)
   const [user, setUser] = useState(null) // null = visitor (not signed in)
   // Not a route: 'analyzing' and 'results' are transient states of one capture,
@@ -554,6 +561,7 @@ function AppShell() {
         {t('nav.skipToContent')}
       </a>
 
+      {!inSession && (
       <header className="flex items-center justify-between px-5 pb-2 pt-6">
         <div>
           <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
@@ -570,8 +578,19 @@ function AppShell() {
           onLogout={doLogout}
         />
       </header>
+      )}
 
-      <main id="main" tabIndex={-1} className="flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <main
+        id="main"
+        tabIndex={-1}
+        className={`flex-1 px-4 ${
+          // No tab bar to clear during a session, so the padding that keeps
+          // content above it would just be a gap under the primary button.
+          inSession
+            ? 'pb-[calc(1.5rem+env(safe-area-inset-bottom))]'
+            : 'pb-[calc(6rem+env(safe-area-inset-bottom))]'
+        }`}
+      >
         {/* The two first-run interstitials are full-screen takeovers rather than
             destinations — you can't link someone to "your sign-in prompt" — so
             they short-circuit the route table instead of living in it. */}
@@ -608,6 +627,14 @@ function AppShell() {
               }
             />
             <Route
+              path="workout/*"
+              element={
+                <WorkoutProvider isVisitor={!isAuthed}>
+                  <WorkoutScreen isVisitor={!isAuthed} online={online} />
+                </WorkoutProvider>
+              }
+            />
+            <Route
               path="analysis"
               element={
                 <AnalysisScreen
@@ -640,6 +667,7 @@ function AppShell() {
       </main>
 
       {/* pb-[env(...)] keeps the tab row clear of the iPhone home indicator in standalone mode */}
+      {!inSession && (
       <nav
         aria-label={t('nav.sections')}
         className="fixed inset-x-0 bottom-0 z-10 mx-auto flex max-w-md border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-slate-700 dark:bg-slate-800/95"
@@ -654,6 +682,12 @@ function AppShell() {
             setPhase('capture')
             navigate('/')
           }}
+        />
+        <TabButton
+          active={tab === 'workout'}
+          label={t('nav.workout')}
+          icon="🏋️"
+          onClick={() => navigate('/workout')}
         />
         <TabButton
           active={tab === 'history'}
@@ -674,6 +708,7 @@ function AppShell() {
           onClick={() => navigate('/profile')}
         />
       </nav>
+      )}
 
       {showInstall && installEvent && (
         <InstallPrompt installEvent={installEvent} onDone={() => setShowInstall(false)} />

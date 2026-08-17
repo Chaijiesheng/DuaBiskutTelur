@@ -17,6 +17,7 @@ import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 
 /**
@@ -48,6 +49,18 @@ public class WeightService {
         entity.setWeightKg(weightKg);
         entity.setLoggedAt(Instant.now());
         repository.save(entity);
+    }
+
+    /**
+     * The latest weigh-in, or empty if there has never been one.
+     *
+     * <p>Unrounded and unaveraged, unlike {@link #history}: that one smooths
+     * weekly to make a trend line readable, whereas this is a single "what do
+     * you weigh" tile, where showing anything other than the last number the
+     * user actually typed would look like a bug.
+     */
+    public Optional<Double> latestWeightKg(Long userId) {
+        return repository.findFirstByUserIdOrderByLoggedAtDesc(userId).map(WeightEntity::getWeightKg);
     }
 
     public WeightHistoryResponse history(Long userId) {

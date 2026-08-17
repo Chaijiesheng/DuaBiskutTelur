@@ -5,6 +5,7 @@ import com.duabiskuttelur.config.AppProperties;
 import com.duabiskuttelur.model.FoodTaxonomy;
 import com.duabiskuttelur.model.IdentifiedFood;
 import com.duabiskuttelur.model.FeedbackResult;
+import com.duabiskuttelur.model.WorkoutCoachNote;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
@@ -62,7 +63,7 @@ import java.util.concurrent.TimeUnit;
  * </ul>
  */
 @Component
-public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
+public class GeminiClient implements VisionAnalysisClient, FeedbackClient, WorkoutCoachClient {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiClient.class);
 
@@ -272,6 +273,63 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
         return Map.of("type", "ARRAY", "items", type("STRING"));
     }
 
+    /**
+     * The coach's role for both workout calls.
+     *
+     * <p>The strongest rule here is the one about not changing the session. The
+     * context this prompt is given already contains the exercises, sets and reps
+     * that a deterministic planner chose and that the user is about to be shown;
+     * a model that "helpfully" suggests four sets instead of three would be
+     * contradicting the screen it is printed on. Same division of labour as the
+     * feedback call, which scores nothing and only comments.
+     */
+    private static final String WORKOUT_SYSTEM_PROMPT = """
+            You are a warm, plain-spoken fitness coach writing to someone who logs their meals in \
+            the same app. Today's session was already chosen by a deterministic planner from a \
+            fixed exercise catalogue. You do not design, revise, extend or shorten it, and you \
+            never suggest a different exercise, a different number of sets or a different number \
+            of reps. You explain the session you were given, using only the facts you were given. \
+            Do not invent numbers, dates, streaks or past sessions. Never give medical advice, \
+            diagnose an injury, recommend supplements, or emit links or contact details. Keep it \
+            to a few short sentences and sound like a person, not a brochure. \
+            Respond with STRICT JSON ONLY: a single JSON object, no prose, no markdown fences.""";
+
+    /** Matches {@link com.duabiskuttelur.model.WorkoutCoachNote}. */
+    private static final Map<String, Object> COACH_NOTE_SCHEMA = coachNoteSchema();
+
+    private static Map<String, Object> coachNoteSchema() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("summary", type("STRING"));
+        properties.put("factors", arrayOfStrings());
+
+        Map<String, Object> object = new LinkedHashMap<>();
+        object.put("type", "OBJECT");
+        object.put("properties", properties);
+        object.put("propertyOrdering", List.copyOf(properties.keySet()));
+        object.put("required", List.copyOf(properties.keySet()));
+        return object;
+    }
+
+    /**
+     * A one-field object rather than a bare string, because
+     * {@code generationConfig} pins {@code responseMimeType} to JSON for every
+     * call this client makes. Asking for plain text on one path only would mean
+     * two response shapes to parse and two ways for a model to surprise us.
+     */
+    private static final Map<String, Object> COACH_REPLY_SCHEMA = coachReplySchema();
+
+    private static Map<String, Object> coachReplySchema() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("reply", type("STRING"));
+
+        Map<String, Object> object = new LinkedHashMap<>();
+        object.put("type", "OBJECT");
+        object.put("properties", properties);
+        object.put("propertyOrdering", List.copyOf(properties.keySet()));
+        object.put("required", List.copyOf(properties.keySet()));
+        return object;
+    }
+
     private static Map<String, Object> generationConfig(int maxOutputTokens, Map<String, Object> schema) {
         return Map.of(
                 "maxOutputTokens", maxOutputTokens,
@@ -444,6 +502,72 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient {
             return mapper.readValue(json, FeedbackResult.class);
         } catch (Exception e) {
             throw new IllegalStateException("Could not parse feedback from Gemini response", e);
+        }
+    }
+
+    @Override
+    public WorkoutCoachNote coachNote(String context, String languageName) {
+        String prompt = """
+                %s
+
+                Respond with STRICT JSON ONLY (no markdown fences) with exactly these fields:
+                {
+                  "summary": "2-3 short sentences saying why today's session looks the way it does, addressed to the user as 'you'",
+                  "factors": [2-4 short lines, each one specific thing above that shaped it]
+                }""".formatted(context);
+        return callCoach(prompt, languageName, COACH_NOTE_SCHEMA,
+                json -> readCoachJson(json, WorkoutCoachNote.class, "coach note"));
+    }
+
+    @Override
+    public String sessionReply(String context, String languageName) {
+        String prompt = """
+                %s
+
+                Respond with STRICT JSON ONLY (no markdown fences) with exactly this field:
+                {
+                  "reply": "one or two sentences replying to how they rated it, naming what changes next session"
+                }""".formatted(context);
+        return callCoach(prompt, languageName, COACH_REPLY_SCHEMA,
+                json -> readCoachJson(json, CoachReply.class, "coach reply").reply());
+    }
+
+    /** The wire shape of {@link #COACH_REPLY_SCHEMA}. */
+    private record CoachReply(String reply) {
+    }
+
+    /**
+     * Both coach calls, which differ only in their schema and how the answer is
+     * read. 1024 tokens: these are a handful of sentences, but the same thinking
+     * arithmetic as every other call on this chain applies, so the budget is set
+     * well above the visible answer.
+     *
+     * <p>The <em>feedback</em> model chain and budget deliberately, not the
+     * vision one. This is a few sentences of prose with a working non-AI
+     * fallback behind it, which is exactly what that shorter 25s budget exists
+     * for — a struggling provider must not hold a request thread for a minute
+     * over a sentence nobody is blocked on.
+     */
+    private <T> T callCoach(String prompt, String languageName, Map<String, Object> schema,
+                            java.util.function.Function<String, T> read) {
+        Map<String, Object> body = Map.of(
+                "systemInstruction", Map.of("parts", List.of(Map.of(
+                        "text", WORKOUT_SYSTEM_PROMPT + languageRule(languageName)))),
+                "contents", List.of(Map.of(
+                        "role", "user",
+                        "parts", List.of(Map.of("text", prompt)))),
+                "generationConfig", generationConfig(1024, schema));
+
+        String text = callWithRetry(props.getGeminiFeedbackModels(), body,
+                props.getGeminiFeedbackBudgetMs(), "workout-coach", restClient);
+        return read.apply(extractJson(text, '{', '}'));
+    }
+
+    private <T> T readCoachJson(String json, Class<T> type, String what) {
+        try {
+            return mapper.readValue(json, type);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not parse " + what + " from Gemini response", e);
         }
     }
 

@@ -3,6 +3,7 @@ package com.duabiskuttelur.controller;
 import com.duabiskuttelur.client.FeedbackClient;
 import com.duabiskuttelur.client.UsdaClient;
 import com.duabiskuttelur.client.VisionAnalysisClient;
+import com.duabiskuttelur.client.WorkoutCoachClient;
 import com.duabiskuttelur.model.FeedbackResult;
 import com.duabiskuttelur.model.IdentifiedFood;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -66,6 +67,17 @@ class PortionCorrectionEndpointTest {
 
     @MockitoBean
     private FeedbackClient feedbackClient;
+
+    /**
+     * Not used by anything this test exercises, but required all the same:
+     * {@code GeminiClient} is one bean implementing all four provider
+     * interfaces, and replacing it by type leaves nothing satisfying the ones
+     * not named here. Without this line the context fails to start on
+     * {@code WorkoutCoach}, and every test in the class errors on a workout
+     * feature it never touches.
+     */
+    @MockitoBean
+    private WorkoutCoachClient workoutCoachClient;
 
     @BeforeEach
     void stubProviders() {

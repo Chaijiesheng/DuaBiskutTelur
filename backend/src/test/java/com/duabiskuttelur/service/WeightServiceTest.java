@@ -91,6 +91,15 @@ class WeightServiceTest {
         @Override public <S extends WeightEntity> S save(S entity) { entries.add(entity); return entity; }
         @Override public int deleteByUserId(Long userId) { throw new UnsupportedOperationException(); }
         @Override public List<WeightEntity> findByUserIdOrderByLoggedAtDesc(Long userId) { throw new UnsupportedOperationException(); }
+
+        /** Implemented rather than thrown: the workout dashboard's weight tile reads it. */
+        @Override
+        public Optional<WeightEntity> findFirstByUserIdOrderByLoggedAtDesc(Long userId) {
+            return entries.stream()
+                    .filter(e -> e.getUserId().equals(userId))
+                    .max(java.util.Comparator.comparing(WeightEntity::getLoggedAt));
+        }
+
         @Override public <S extends WeightEntity> List<S> saveAll(Iterable<S> entities) { throw new UnsupportedOperationException(); }
         @Override public Optional<WeightEntity> findById(Long aLong) { throw new UnsupportedOperationException(); }
         @Override public boolean existsById(Long aLong) { throw new UnsupportedOperationException(); }

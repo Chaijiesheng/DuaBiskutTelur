@@ -37,6 +37,7 @@ class AccountDataServiceTest {
     private MenuScanRepository menuScanRepository;
     private WaterRepository waterRepository;
     private WeightRepository weightRepository;
+    private WorkoutService workoutService;
     @SuppressWarnings("unchecked")
     private final FindByIndexNameSessionRepository<Session> sessionRepository =
             Mockito.mock(FindByIndexNameSessionRepository.class);
@@ -58,10 +59,11 @@ class AccountDataServiceTest {
         menuScanRepository = Mockito.mock(MenuScanRepository.class);
         waterRepository = Mockito.mock(WaterRepository.class);
         weightRepository = Mockito.mock(WeightRepository.class);
+        workoutService = Mockito.mock(WorkoutService.class);
         Mockito.reset(sessionRepository);
         when(sessionRepository.findByPrincipalName(GOOGLE_SUB)).thenReturn(Map.of());
         service = new AccountDataService(userRepository, mealRepository, menuScanRepository,
-                waterRepository, weightRepository, sessionRepository, new ObjectMapper());
+                waterRepository, weightRepository, workoutService, sessionRepository, new ObjectMapper());
     }
 
     /**
@@ -80,6 +82,10 @@ class AccountDataServiceTest {
         verify(menuScanRepository).deleteByUserId(USER_ID);
         verify(waterRepository).deleteByUserId(USER_ID);
         verify(weightRepository).deleteByUserId(USER_ID);
+        // The workout tables are cleared behind one call, because two of them
+        // carry no user_id and can only be reached through this user's sessions
+        // — see WorkoutService.deleteAllForUser.
+        verify(workoutService).deleteAllForUser(USER_ID);
         verify(userRepository).delete(user);
     }
 

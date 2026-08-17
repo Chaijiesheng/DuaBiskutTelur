@@ -43,6 +43,7 @@ public class AccountDataService {
     private final MenuScanRepository menuScanRepository;
     private final WaterRepository waterRepository;
     private final WeightRepository weightRepository;
+    private final WorkoutService workoutService;
     private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
     private final ObjectMapper mapper;
 
@@ -51,6 +52,7 @@ public class AccountDataService {
                               MenuScanRepository menuScanRepository,
                               WaterRepository waterRepository,
                               WeightRepository weightRepository,
+                              WorkoutService workoutService,
                               FindByIndexNameSessionRepository<? extends Session> sessionRepository,
                               ObjectMapper mapper) {
         this.userRepository = userRepository;
@@ -58,6 +60,7 @@ public class AccountDataService {
         this.menuScanRepository = menuScanRepository;
         this.waterRepository = waterRepository;
         this.weightRepository = weightRepository;
+        this.workoutService = workoutService;
         this.sessionRepository = sessionRepository;
         this.mapper = mapper;
     }
@@ -93,12 +96,17 @@ public class AccountDataService {
         int menuScans = menuScanRepository.deleteByUserId(userId);
         int waterDays = waterRepository.deleteByUserId(userId);
         int weighIns = weightRepository.deleteByUserId(userId);
+        // Delegated rather than inlined like the four above, because two of the
+        // workout tables carry no user_id and can only be reached through this
+        // user's sessions — so the order matters and belongs next to the code
+        // that knows why. See WorkoutService.deleteAllForUser.
+        int workoutRows = workoutService.deleteAllForUser(userId);
         userRepository.delete(user);
 
         // Counts, never the email or name — this line outlives the account that
         // would have made logging them defensible.
-        log.info("Deleted account {}: {} meals, {} menu scans, {} water days, {} weigh-ins",
-                userId, meals, menuScans, waterDays, weighIns);
+        log.info("Deleted account {}: {} meals, {} menu scans, {} water days, {} weigh-ins, {} workout rows",
+                userId, meals, menuScans, waterDays, weighIns, workoutRows);
     }
 
     /** Signs the account out of every device, not just the one asking. */

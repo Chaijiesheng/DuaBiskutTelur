@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface WeightRepository extends JpaRepository<WeightEntity, Long> {
 
@@ -15,6 +16,13 @@ public interface WeightRepository extends JpaRepository<WeightEntity, Long> {
 
     /** Every weight the user has logged, for the data export. */
     List<WeightEntity> findByUserIdOrderByLoggedAtDesc(Long userId);
+
+    /**
+     * The most recent weigh-in. The workout dashboard shows one number, and
+     * loading a user's whole weight history to take the first row of it would be
+     * a table scan for a single tile.
+     */
+    Optional<WeightEntity> findFirstByUserIdOrderByLoggedAtDesc(Long userId);
 
     /**
      * Bulk delete for account deletion. A derived {@code deleteByUserId} would

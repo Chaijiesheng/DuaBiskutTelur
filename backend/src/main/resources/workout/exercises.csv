@@ -1,0 +1,107 @@
+# The exercise catalogue every workout is built from.
+#
+# Sessions are assembled from these rows by WorkoutPlanner, not written by the
+# model. A generated plan can hallucinate an exercise, prescribe 40 reps of
+# something nobody should do 40 reps of, or return nothing at all on a bad day;
+# a table cannot. The model's job in this feature is the coaching sentence, and
+# only that.
+#
+# Format, pipe-delimited, one exercise per line:
+#
+#   key|name|pattern|target|equipment|level|unit|base_reps|cue
+#
+# key         Stable identifier. Referenced by workout_session_exercise, so
+#             renaming one silently rewrites what old sessions say the user did.
+#             Add a new row instead.
+# pattern     squat | hinge | push | pull | core | cardio | mobility
+#             The load-bearing column. It is what lets the planner fill a
+#             balanced session, and what makes the Replace sheet's promise --
+#             "each of these keeps the same job in your session" -- literally
+#             true rather than marketing. Alternatives are drawn from the same
+#             pattern at the same or lower equipment tier.
+# equipment   none | bands | dumbbells | gym
+#             What you must HAVE to do this. A user's answer is a set; a row is
+#             offered only if its single requirement is in that set. "none" is
+#             therefore always available, which is what keeps a kit-less
+#             beginner from getting a short session full of empty slots.
+# level       beginner | intermediate | advanced
+#             The MINIMUM level. An intermediate user can be given beginner
+#             rows; a beginner is never given intermediate ones.
+# unit        reps | sec | each_side
+#             A plank prescribed as "30 reps" is wrong in a way no amount of
+#             number-tuning fixes.
+# base_reps   The beginner-baseline dose. WorkoutPlanner scales it by level and
+#             by how the last sessions were rated, so this is a starting point
+#             and not a prescription.
+# cue         One sentence, shown only once the exercise is in front of you.
+#             The single thing most likely to keep the movement safe.
+#
+# INVARIANT, enforced by WorkoutCatalogTest: every pattern has at least one
+# equipment=none, level=beginner row. Break it and a beginner with no equipment
+# gets a session that is quietly short rather than one that fails loudly.
+
+bodyweight_squat|Bodyweight Squat|squat|Legs and Glutes|none|beginner|reps|12|Sit back like there is a chair behind you and keep your knees tracking over your toes.
+box_squat|Box Squat|squat|Legs and Glutes|none|beginner|reps|10|Touch the seat lightly and stand back up. Do not drop onto it.
+split_squat|Split Squat|squat|Legs and Glutes|none|intermediate|each_side|8|Most of your weight on the front foot. The back leg is a kickstand.
+reverse_lunge|Reverse Lunge|squat|Legs and Glutes|none|intermediate|each_side|10|Step back rather than forward so the front knee stays calm.
+goblet_squat|Goblet Squat|squat|Legs and Glutes|dumbbells|beginner|reps|10|Hold the weight against your chest and let it counterbalance you.
+dumbbell_lunge|Dumbbell Lunge|squat|Legs and Glutes|dumbbells|intermediate|each_side|8|Lower straight down. Your back knee should nearly touch the floor.
+band_squat|Banded Squat|squat|Legs and Glutes|bands|beginner|reps|12|Push your knees out against the band the whole way down and up.
+leg_press|Leg Press|squat|Legs and Glutes|gym|beginner|reps|12|Stop just short of locking your knees at the top.
+barbell_squat|Barbell Back Squat|squat|Legs and Glutes|gym|advanced|reps|8|Brace as if bracing for a punch before every single rep.
+bulgarian_split_squat|Bulgarian Split Squat|squat|Legs and Glutes|gym|advanced|each_side|8|Rear foot elevated. Keep the front shin close to vertical.
+
+glute_bridge|Glute Bridge|hinge|Glutes and Hamstrings|none|beginner|reps|12|Squeeze at the top for a full second before lowering.
+hip_hinge|Standing Hip Hinge|hinge|Hamstrings and Back|none|beginner|reps|12|Push your hips back, not down. Your shins stay near vertical.
+single_leg_bridge|Single Leg Glute Bridge|hinge|Glutes and Hamstrings|none|intermediate|each_side|10|Keep your hips level. Do not let the free side drop.
+nordic_negative|Nordic Curl Negative|hinge|Hamstrings|none|advanced|reps|5|Lower as slowly as you can control, then push back with your hands.
+dumbbell_rdl|Dumbbell Romanian Deadlift|hinge|Hamstrings and Glutes|dumbbells|beginner|reps|10|Weights stay close to your legs. Stop when your hamstrings say so.
+dumbbell_hip_thrust|Dumbbell Hip Thrust|hinge|Glutes|dumbbells|intermediate|reps|12|Tuck your chin and finish with your ribs down, not flared.
+band_pull_through|Band Pull Through|hinge|Glutes and Hamstrings|bands|beginner|reps|12|The band pulls your hips back. You pull them forward.
+barbell_deadlift|Barbell Deadlift|hinge|Back and Hamstrings|gym|advanced|reps|5|Take the slack out of the bar before you pull. No jerking off the floor.
+back_extension|Back Extension|hinge|Lower Back and Glutes|gym|intermediate|reps|12|Stop at a straight line. There is nothing to gain past it.
+
+knee_push_up|Knee Push Up|push|Chest and Triceps|none|beginner|reps|10|Body in one line from knees to head. Elbows at roughly 45 degrees.
+incline_push_up|Incline Push Up|push|Chest and Triceps|none|beginner|reps|10|Hands on a table or wall. The higher the hands the easier it gets.
+push_up|Push Up|push|Chest and Triceps|none|intermediate|reps|8|Elbows at 45 degrees and your body in one straight line throughout.
+pike_push_up|Pike Push Up|push|Shoulders and Triceps|none|advanced|reps|8|Hips high, crown of the head towards the floor between your hands.
+dumbbell_floor_press|Dumbbell Floor Press|push|Chest and Triceps|dumbbells|beginner|reps|10|The floor caps the range, which is kind to a cranky shoulder.
+dumbbell_shoulder_press|Dumbbell Shoulder Press|push|Shoulders|dumbbells|intermediate|reps|10|Press slightly forward of your ears, not behind your head.
+band_chest_press|Band Chest Press|push|Chest and Triceps|bands|beginner|reps|12|Anchor behind you and press to full arm length without locking hard.
+bench_press|Barbell Bench Press|push|Chest and Triceps|gym|advanced|reps|8|Use a spotter or safety pins. Touch the chest, do not bounce.
+cable_chest_fly|Cable Chest Fly|push|Chest|gym|intermediate|reps|12|A slight bend in the elbows the whole way. This is not a press.
+
+prone_row|Prone Floor Row|pull|Upper Back|none|beginner|reps|12|Face down, drag your elbows back along the floor and squeeze your shoulder blades.
+superman|Superman|pull|Upper Back and Lower Back|none|beginner|sec|20|Lift your chest and thighs a few centimetres only. Look at the floor.
+doorway_row|Doorway Row|pull|Back and Biceps|none|intermediate|reps|10|Hold a solid frame, lean back, and pull your chest to your hands.
+inverted_row|Inverted Row|pull|Back and Biceps|none|advanced|reps|8|Under a sturdy table. Body straight, pull the chest to the edge.
+dumbbell_row|Dumbbell Row|pull|Back and Biceps|dumbbells|beginner|each_side|10|Pull to your ribs, not your shoulder. Shoulders down and back.
+dumbbell_reverse_fly|Dumbbell Reverse Fly|pull|Rear Shoulders and Upper Back|dumbbells|intermediate|reps|12|Light weight. Lead with the elbows and stop level with your back.
+band_row|Band Row|pull|Back and Biceps|bands|beginner|reps|12|Pull to the ribs and pause for a beat before letting it back out.
+band_pull_apart|Band Pull Apart|pull|Rear Shoulders|bands|beginner|reps|15|Straight arms. Pull the band to your chest and open across.
+lat_pulldown|Lat Pulldown|pull|Back and Biceps|gym|beginner|reps|12|Pull the bar to your collarbone and let your shoulder blades travel.
+pull_up|Pull Up|pull|Back and Biceps|gym|advanced|reps|6|Start from a dead hang and pull your chest towards the bar.
+
+dead_bug|Dead Bug|core|Core|none|beginner|each_side|10|Press your lower back into the floor and keep it there the whole set.
+plank|Plank|core|Core|none|beginner|sec|30|Ribs down, hips level, and keep breathing.
+bird_dog|Bird Dog|core|Core and Lower Back|none|beginner|each_side|10|Move slowly. Your hips should not rock at all.
+side_plank|Side Plank|core|Obliques|none|intermediate|sec|25|Stack your shoulders and hips and push the floor away.
+hollow_hold|Hollow Hold|core|Core|none|advanced|sec|25|Lower back glued down. If it lifts, raise your legs higher.
+dumbbell_suitcase_carry|Suitcase Carry|core|Core and Grip|dumbbells|intermediate|each_side|20|One weight, walk tall, and refuse to lean towards it.
+pallof_press|Band Pallof Press|core|Core|bands|intermediate|each_side|10|Stand side on to the anchor and resist the twist as you press out.
+cable_woodchop|Cable Woodchop|core|Obliques|gym|intermediate|each_side|12|Turn from the ribs. Your arms are just holding on.
+
+march_in_place|March In Place|cardio|Full Body|none|beginner|sec|45|Drive the knees to hip height and keep the arms moving.
+step_touch|Step Touch|cardio|Full Body|none|beginner|sec|45|Wide steps side to side. Land softly through the whole foot.
+jumping_jack|Jumping Jack|cardio|Full Body|none|intermediate|sec|40|Land quietly with soft knees. Quiet feet means good landings.
+high_knees|High Knees|cardio|Full Body|none|advanced|sec|30|Fast feet, tall chest. Stop the set when your form goes not when it hurts.
+burpee|Burpee|cardio|Full Body|none|advanced|reps|8|Step back instead of jumping back if your lower back starts to sag.
+stationary_bike|Stationary Bike|cardio|Legs and Heart|gym|beginner|sec|180|Steady effort you could hold a short conversation through.
+rowing_machine|Rowing Machine|cardio|Full Body|gym|intermediate|sec|180|Legs, then back, then arms. Reverse that order coming forward.
+
+cat_cow|Cat Cow|mobility|Spine|none|beginner|reps|10|Move one vertebra at a time and let your breath set the pace.
+hip_flexor_stretch|Half Kneeling Hip Flexor Stretch|mobility|Hips|none|beginner|each_side|30|Tuck your tailbone first. The stretch should move to the front of the hip.
+worlds_greatest_stretch|Worlds Greatest Stretch|mobility|Hips and Spine|none|intermediate|each_side|8|Long lunge, drop the elbow inside the front foot, then open to the ceiling.
+thoracic_rotation|Thoracic Rotation|mobility|Upper Back|none|beginner|each_side|10|Turn from the mid back and let your eyes follow your hand.
+ankle_rock|Ankle Rocker|mobility|Ankles|none|beginner|each_side|12|Drive the knee past the toes with the heel stubbornly down.
+band_shoulder_dislocate|Band Shoulder Pass Through|mobility|Shoulders|bands|beginner|reps|10|Go wider than feels necessary. Narrow grips are how shoulders get pinched.

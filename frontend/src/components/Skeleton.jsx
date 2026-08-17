@@ -104,6 +104,49 @@ export function AnalysisSkeleton({ label }) {
   )
 }
 
+/**
+ * The Workout tab while today's plan is being built.
+ *
+ * <p>Shaped like the plan card that is coming — kicker, big title, meta line,
+ * primary button — because building a session is the one wait in this app that
+ * is genuinely doing work rather than fetching a row, and a placeholder that
+ * matches the answer makes it read as "nearly here".
+ *
+ * <p>Takes an optional visible title and phase line, unlike the other skeletons.
+ * On a first-ever setup the wait follows six questions and deserves an
+ * explanation; on a plain tab open it does not, and passing neither leaves just
+ * the grey blocks.
+ */
+export function WorkoutPlanSkeleton({ label, title, phase }) {
+  return (
+    <SkeletonRegion label={label} className="space-y-3 pt-2">
+      {title && (
+        <div className="pb-2 pt-4 text-center">
+          <span aria-hidden="true" className="text-4xl motion-safe:animate-pulse">🏋️</span>
+          <h2 className="mt-3 text-base font-extrabold text-slate-900 dark:text-slate-100">{title}</h2>
+          {phase && (
+            <p className="mx-auto mt-1.5 max-w-[15rem] text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+              {phase}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="space-y-2.5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <SkeletonBlock className="h-3 w-2/5" />
+        <SkeletonBlock className="h-7 w-3/5 rounded-lg" />
+        <SkeletonBlock className="h-2.5 w-1/2" />
+        <SkeletonBlock className="h-12 w-full rounded-2xl" />
+      </div>
+      <SkeletonBlock className="h-20 w-full rounded-2xl" />
+      <div className="grid grid-cols-3 gap-2">
+        {Array.from({ length: 3 }, (_, i) => (
+          <SkeletonBlock key={i} className="h-16 w-full rounded-2xl" />
+        ))}
+      </div>
+    </SkeletonRegion>
+  )
+}
+
 /** The achievements grid inside the Profile accordion. */
 export function BadgeGridSkeleton({ label, count = 6 }) {
   return (

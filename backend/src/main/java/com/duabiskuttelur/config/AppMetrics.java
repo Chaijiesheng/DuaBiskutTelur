@@ -77,6 +77,31 @@ public final class AppMetrics {
     /** End-to-end analysis, vision through feedback. Tags: {@link #TAG_OUTCOME}. */
     public static final String ANALYSIS_DURATION = "analysis.duration";
 
+    /**
+     * A day's workout built for a user. Tags: {@link #TAG_FOCUS}.
+     *
+     * <p>Sessions are generated once per user per day and never re-rolled, so
+     * this counts distinct planned days rather than page views — which makes it
+     * the denominator for {@link #WORKOUT_SESSION_COMPLETED}. The gap between
+     * the two is the number worth watching: plans generated and never started
+     * are the feature failing quietly.
+     */
+    public static final String WORKOUT_SESSION_GENERATED = "workout.session.generated";
+
+    /** A session the user finished. Untagged; the ratio against generated is the signal. */
+    public static final String WORKOUT_SESSION_COMPLETED = "workout.session.completed";
+
+    /**
+     * Which path wrote the coaching prose. Tags: {@link #TAG_SOURCE} (ai|rules).
+     *
+     * <p>The rule-based path is a designed fallback, not an error, so it logs at
+     * WARN and nothing else would ever notice it was carrying every request. A
+     * sustained {@code source=rules} share is the provider being down for this
+     * feature specifically, which no Gemini-level metric distinguishes from the
+     * app simply not asking.
+     */
+    public static final String WORKOUT_COACH_SOURCE = "workout.coach.source";
+
     public static final String TAG_MODEL = "model";
     /** vision | menu | feedback */
     public static final String TAG_TYPE = "type";
@@ -85,6 +110,8 @@ public final class AppMetrics {
     public static final String TAG_SOURCE = "source";
     /** Which validation rule rejected a USDA match — see NutritionValidator.Rule. */
     public static final String TAG_RULE = "rule";
+    /** What a generated session was built around — see WorkoutPlanner.Focus. */
+    public static final String TAG_FOCUS = "focus";
 
     public static final String OUTCOME_SUCCESS = "success";
     public static final String OUTCOME_RATE_LIMITED = "rate_limited";

@@ -14,6 +14,7 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
@@ -48,6 +49,8 @@ class QueryIndexTest {
 
     private static final int USERS = 5;
     private static final int ROWS_PER_USER = 200;
+    /** One session per user per day; unique on (user_id, session_date) caps it at that. */
+    private static final int WORKOUT_DAYS_PER_USER = 120;
 
     /**
      * Every query method declared on a repository, and the index its plan is
@@ -77,6 +80,7 @@ class QueryIndexTest {
             // idx_weight_entry_user_logged
             "WeightRepository#findByUserIdAndLoggedAtBetween",
             "WeightRepository#findByUserIdOrderByLoggedAtDesc",
+            "WeightRepository#findFirstByUserIdOrderByLoggedAtDesc",
             "WeightRepository#deleteByUserId",
             // uk_water_entry_user_date (V6)
             "WaterRepository#findByUserIdAndDate",
@@ -88,12 +92,35 @@ class QueryIndexTest {
             "NutritionCacheRepository#findByCanonicalName",
             // V10's own unique constraints
             "LocalFoodRepository#findByCanonicalName",
-            "LocalFoodRepository#findByAlias");
+            "LocalFoodRepository#findByAlias",
+            // V11 adds no index of its own -- every workout query is served by a
+            // unique constraint's index, and the assertions below are what makes
+            // that claim checkable rather than an assumption in a comment.
+            // uk_workout_profile_user
+            "WorkoutProfileRepository#findByUserId",
+            "WorkoutProfileRepository#deleteByUserId",
+            // uk_workout_session_user_date
+            "WorkoutSessionRepository#findByUserIdAndSessionDate",
+            "WorkoutSessionRepository#findByUserIdAndSessionDateBetweenOrderBySessionDateAsc",
+            "WorkoutSessionRepository#findIdsByUserId",
+            "WorkoutSessionRepository#deleteByUserId",
+            // uk_workout_exercise_slot
+            "WorkoutSessionExerciseRepository#findBySessionIdOrderByPositionAsc",
+            "WorkoutSessionExerciseRepository#findBySessionIdAndPosition",
+            "WorkoutSessionExerciseRepository#deleteBySessionIdIn",
+            // uk_workout_set_log
+            "WorkoutSetLogRepository#findBySessionId",
+            "WorkoutSetLogRepository#existsBySessionIdAndExercisePositionAndSetIndex",
+            "WorkoutSetLogRepository#deleteOne",
+            "WorkoutSetLogRepository#deleteBySessionIdAndExercisePosition",
+            "WorkoutSetLogRepository#deleteBySessionIdIn");
 
     private static final Class<?>[] REPOSITORIES = {
             MealAnalysisRepository.class, MenuScanRepository.class, WaterRepository.class,
             WeightRepository.class, UserRepository.class, NutritionCacheRepository.class,
-            LocalFoodRepository.class, LocalFoodAliasRepository.class};
+            LocalFoodRepository.class, LocalFoodAliasRepository.class,
+            WorkoutProfileRepository.class, WorkoutSessionRepository.class,
+            WorkoutSessionExerciseRepository.class, WorkoutSetLogRepository.class};
 
     private String url;
 
@@ -106,8 +133,12 @@ class QueryIndexTest {
         }
     }
 
+    private static Instant base() {
+        return Instant.now().minus(400, ChronoUnit.DAYS);
+    }
+
     private void seed(Connection conn) throws SQLException {
-        Instant base = Instant.now().minus(400, ChronoUnit.DAYS);
+        Instant base = base();
 
         // No foreign key requires these (see the handover on why FKs are not
         // worth adding on H2), but a fixture whose user_ids point at nothing
@@ -175,7 +206,65 @@ class QueryIndexTest {
             weight.executeBatch();
             water.executeBatch();
         }
+        seedWorkoutTables(conn);
         seedLookupTables(conn);
+    }
+
+    /**
+     * Enough workout history that a table scan is not trivially the cheapest
+     * plan. Ids are assigned explicitly so the child rows can point at real
+     * parents without a round trip per insert — the shape the planner sees is
+     * what matters here, not how the rows got there.
+     */
+    private void seedWorkoutTables(Connection conn) throws SQLException {
+        LocalDate day0 = base().atZone(ZoneOffset.UTC).toLocalDate();
+        try (PreparedStatement profile = conn.prepareStatement(
+                     "INSERT INTO workout_profile (user_id, goal, level, days_per_week, session_minutes,"
+                             + " equipment, created_at, updated_at) VALUES (?, 'maintain', 'beginner',"
+                             + " 3, 30, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+             PreparedStatement session = conn.prepareStatement(
+                     "INSERT INTO workout_session (id, user_id, session_date, title, focus, minutes,"
+                             + " level, status, created_at) VALUES (?, ?, ?, 'Full Body', 'full_body',"
+                             + " 30, 'beginner', 'completed', CURRENT_TIMESTAMP)");
+             PreparedStatement exercise = conn.prepareStatement(
+                     "INSERT INTO workout_session_exercise (session_id, position, exercise_key, name,"
+                             + " target, sets, reps, unit) VALUES (?, ?, 'plank', 'Plank', 'Core',"
+                             + " 3, 30, 'sec')");
+             PreparedStatement setLog = conn.prepareStatement(
+                     "INSERT INTO workout_set_log (session_id, exercise_position, set_index, completed_at)"
+                             + " VALUES (?, ?, ?, CURRENT_TIMESTAMP)")) {
+
+            long sessionId = 0;
+            for (long userId = 1; userId <= USERS; userId++) {
+                profile.setLong(1, userId);
+                profile.addBatch();
+
+                for (int day = 0; day < WORKOUT_DAYS_PER_USER; day++) {
+                    sessionId++;
+                    session.setLong(1, sessionId);
+                    session.setLong(2, userId);
+                    session.setObject(3, day0.plusDays(day));
+                    session.addBatch();
+
+                    for (int position = 0; position < 5; position++) {
+                        exercise.setLong(1, sessionId);
+                        exercise.setInt(2, position);
+                        exercise.addBatch();
+
+                        for (int setIndex = 0; setIndex < 3; setIndex++) {
+                            setLog.setLong(1, sessionId);
+                            setLog.setInt(2, position);
+                            setLog.setInt(3, setIndex);
+                            setLog.addBatch();
+                        }
+                    }
+                }
+            }
+            profile.executeBatch();
+            session.executeBatch();
+            exercise.executeBatch();
+            setLog.executeBatch();
+        }
     }
 
     /**
@@ -334,6 +423,50 @@ class QueryIndexTest {
                 "SELECT * FROM water_entry WHERE user_id = 3 ORDER BY date DESC");
         assertUsesIndex("IDX_WEIGHT_ENTRY_USER_LOGGED",
                 "SELECT * FROM weight_entry WHERE user_id = 3 ORDER BY logged_at DESC");
+    }
+
+    /**
+     * V11 adds no CREATE INDEX at all, on the claim that every workout query is
+     * already served by a unique constraint's own index. That claim is only
+     * worth making if something checks it — an extra index costs writes, and a
+     * missing one costs a scan, and neither has any symptom but latency.
+     */
+    @Test
+    void everyWorkoutQueryIsServedByAUniqueConstraintsIndex() throws SQLException {
+        // uk_workout_profile_user — the whole profile read, once per dashboard.
+        assertUsesIndex("UK_WORKOUT_PROFILE_USER", "SELECT * FROM workout_profile WHERE user_id = 3");
+        assertUsesIndex("UK_WORKOUT_PROFILE_USER", "DELETE FROM workout_profile WHERE user_id = 3");
+
+        // uk_workout_session_user_date — today's session, the week strip window,
+        // the id sweep erasure walks, and the bulk delete.
+        assertUsesIndex("UK_WORKOUT_SESSION_USER_DATE",
+                "SELECT * FROM workout_session WHERE user_id = 3 AND session_date = DATE '2026-08-17'");
+        assertUsesIndex("UK_WORKOUT_SESSION_USER_DATE",
+                "SELECT * FROM workout_session WHERE user_id = 3"
+                        + " AND session_date BETWEEN DATE '2026-07-01' AND DATE '2026-08-17'"
+                        + " ORDER BY session_date ASC");
+        assertUsesIndex("UK_WORKOUT_SESSION_USER_DATE", "SELECT id FROM workout_session WHERE user_id = 3");
+        assertUsesIndex("UK_WORKOUT_SESSION_USER_DATE", "DELETE FROM workout_session WHERE user_id = 3");
+
+        // uk_workout_exercise_slot — read whole, read by slot, deleted by session.
+        assertUsesIndex("UK_WORKOUT_EXERCISE_SLOT",
+                "SELECT * FROM workout_session_exercise WHERE session_id = 3 ORDER BY position ASC");
+        assertUsesIndex("UK_WORKOUT_EXERCISE_SLOT",
+                "SELECT * FROM workout_session_exercise WHERE session_id = 3 AND position = 2");
+        assertUsesIndex("UK_WORKOUT_EXERCISE_SLOT",
+                "DELETE FROM workout_session_exercise WHERE session_id IN (3, 4)");
+
+        // uk_workout_set_log — the idempotence probe runs on every logged set,
+        // which is the highest-frequency write in the feature.
+        assertUsesIndex("UK_WORKOUT_SET_LOG", "SELECT * FROM workout_set_log WHERE session_id = 3");
+        assertUsesIndex("UK_WORKOUT_SET_LOG",
+                "SELECT COUNT(*) FROM workout_set_log"
+                        + " WHERE session_id = 3 AND exercise_position = 1 AND set_index = 2");
+        assertUsesIndex("UK_WORKOUT_SET_LOG",
+                "DELETE FROM workout_set_log WHERE session_id = 3 AND exercise_position = 1 AND set_index = 2");
+        assertUsesIndex("UK_WORKOUT_SET_LOG",
+                "DELETE FROM workout_set_log WHERE session_id = 3 AND exercise_position = 1");
+        assertUsesIndex("UK_WORKOUT_SET_LOG", "DELETE FROM workout_set_log WHERE session_id IN (3, 4)");
     }
 
     /**

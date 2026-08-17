@@ -391,3 +391,80 @@ export async function deleteAccount() {
     throw await toApiError(response)
   }
 }
+
+// --------------------------------------------------------------- workouts
+
+/**
+ * Shared shape for the workout endpoints: JSON in, JSON out, and the same
+ * error translation as everything else here.
+ *
+ * Worth factoring rather than repeating ten times: these ten calls are the
+ * feature's whole API surface, and a hand-written `if (!response.ok)` that gets
+ * forgotten on one of them turns a 409 into an unhandled undefined field three
+ * components later.
+ */
+async function workoutJson(path, { method = 'GET', body } = {}) {
+  const response = await apiFetch(path, {
+    method,
+    ...(body === undefined
+      ? {}
+      : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json()
+}
+
+/** The whole Workout tab dashboard, generating today's session if there isn't one. */
+export function fetchWorkoutToday(lang = 'en') {
+  return workoutJson(`/api/workout/today?lang=${encodeURIComponent(lang)}`)
+}
+
+/** Saves the six onboarding answers and returns the dashboard built from them. */
+export function saveWorkoutProfile(profile, lang = 'en') {
+  return workoutJson(`/api/workout/profile?lang=${encodeURIComponent(lang)}`, {
+    method: 'POST',
+    body: profile,
+  })
+}
+
+export function startWorkoutSession(id) {
+  return workoutJson(`/api/workout/sessions/${id}/start`, { method: 'POST' })
+}
+
+/**
+ * Marks one set done or not done.
+ *
+ * PUT with the intended result rather than POST "one more", which is what lets
+ * WorkoutContext replay a queue of sets logged offline without tracking which
+ * ones already landed — the server's unique constraint absorbs the duplicates.
+ */
+export function logWorkoutSet(id, exercisePosition, setIndex, done) {
+  return workoutJson(`/api/workout/sessions/${id}/sets`, {
+    method: 'PUT',
+    body: { exercisePosition, setIndex, done },
+  })
+}
+
+export function fetchWorkoutAlternatives(id, position) {
+  return workoutJson(`/api/workout/sessions/${id}/exercises/${position}/alternatives`)
+}
+
+export function replaceWorkoutExercise(id, position, exerciseKey) {
+  return workoutJson(`/api/workout/sessions/${id}/exercises/${position}`, {
+    method: 'PUT',
+    body: { exerciseKey },
+  })
+}
+
+export function skipWorkoutSession(id, skipped) {
+  return workoutJson(`/api/workout/sessions/${id}/${skipped ? 'skip' : 'unskip'}`, { method: 'POST' })
+}
+
+export function completeWorkoutSession(id, { feel, energy, actualMinutes, lang = 'en' }) {
+  return workoutJson(`/api/workout/sessions/${id}/complete`, {
+    method: 'POST',
+    body: { feel, energy, actualMinutes, lang },
+  })
+}
