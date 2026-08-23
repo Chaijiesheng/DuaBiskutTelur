@@ -1,4 +1,5 @@
 import { useLanguage } from '../i18n/LanguageContext.jsx'
+import ExerciseDemo from './ExerciseDemo.jsx'
 
 /**
  * The session preview: what you are about to do, before you start doing it.
@@ -62,6 +63,11 @@ export default function WorkoutDetail({ session, onBack, onStart }) {
             >
               {String(exercise.position + 1).padStart(2, '0')}
             </span>
+            {/* Lazy on purpose: a six-exercise preview would otherwise pull
+                every demonstration at once, before the user has started. */}
+            <div className="w-16 shrink-0">
+              <ExerciseDemo exerciseKey={exercise.key} name={exercise.name} rounded="rounded-lg" />
+            </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{exercise.name}</p>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{exercise.target}</p>

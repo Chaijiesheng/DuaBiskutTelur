@@ -648,6 +648,10 @@ export default {
     glanceRestDayTitle: '今天没有安排训练',
 
     howTo: 'ⓘ 怎么做',
+    demoUnavailable: '暂无示范',
+    demoAlt: (name) => `${name} 示范`,
+    viewDemo: '查看示范',
+    viewDemoHint: '点击查看动作与要领',
     doThis: '这样做',
     commonMistake: '常见错误',
     watchVideo: '在 YouTube 观看',

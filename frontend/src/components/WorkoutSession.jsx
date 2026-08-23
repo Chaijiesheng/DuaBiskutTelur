@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchWorkoutAlternatives } from '../api.js'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
-import ExerciseFigure from './ExerciseFigure.jsx'
+import ExerciseDemo from './ExerciseDemo.jsx'
 
 /**
  * The in-workout runner — variant A, "set led".
@@ -141,16 +141,30 @@ export default function WorkoutSession({
       </h2>
       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{exercise.target}</p>
 
-      {/* The demonstration. Tapping anywhere on it opens the How-to sheet — the
-          chip is a visible affordance for that, not a separate target. */}
+      {/* Mid-set the questions are "which set am I on" and "how many left". A
+          full-width looping demonstration competes with the rep count for
+          attention and, at 360px, pushes Complete-set below the fold — so the
+          demonstration rides as a strip and opens full size on tap. */}
       <button
         type="button"
         onClick={() => setHowToOpen(true)}
-        className="relative mt-4 flex h-[9.25rem] w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60"
+        className="mt-4 flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-2 text-left dark:border-slate-700 dark:bg-slate-900/60"
       >
-        <ExerciseFigure exerciseKey={exercise.key} pattern={exercise.pattern} />
-        <span className="absolute bottom-2 right-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[0.7rem] font-bold text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-          {t('workout.howTo')}
+        <span className="w-24 shrink-0">
+          <ExerciseDemo
+            exerciseKey={exercise.key}
+            name={exercise.name}
+            priority
+            rounded="rounded-xl"
+          />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-bold text-slate-900 dark:text-slate-100">
+            {t('workout.viewDemo')}
+          </span>
+          <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+            {t('workout.viewDemoHint')}
+          </span>
         </span>
       </button>
 
@@ -487,9 +501,10 @@ function HowToSheet({ exercise, online, onClose }) {
           {exercise.target} · {t('workout.scheme', exercise.sets, exercise.reps, unit)}
         </p>
 
-        {/* Every pose at once — the shape of the whole movement, held still. */}
-        <div className="mt-3 flex h-40 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60">
-          <ExerciseFigure exerciseKey={exercise.key} pattern={exercise.pattern} variant="all" />
+        {/* Full size here: the sheet exists to be looked at, so the movement
+            gets the room the session screen deliberately withholds. */}
+        <div className="mt-3">
+          <ExerciseDemo exerciseKey={exercise.key} name={exercise.name} priority />
         </div>
 
         {exercise.cue && (

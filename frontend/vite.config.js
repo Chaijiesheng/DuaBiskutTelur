@@ -39,6 +39,21 @@ export default defineConfig({
               expiration: { maxEntries: 2 },
             },
           },
+          // Exercise demonstrations are deliberately absent from globPatterns
+          // above: precaching them would make every install download the whole
+          // library up front, which is already ~3 MB and grows with the
+          // catalogue. Cached on first view instead, so the demonstrations a
+          // user actually sees are there the next time they train offline.
+          // maxEntries caps the library at roughly its current size rather than
+          // letting the cache grow without limit as assets are added.
+          {
+            urlPattern: /\/exercises\/.*\.gif$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'exercise-demos',
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 60 },
+            },
+          },
         ],
         navigateFallback: 'index.html',
         // Never serve the cached SPA for backend routes — the OAuth login/callback

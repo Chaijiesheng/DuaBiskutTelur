@@ -651,6 +651,10 @@ export default {
     glanceRestDayTitle: 'Tiada senaman dirancang',
 
     howTo: 'ⓘ Cara',
+    demoUnavailable: 'Demonstrasi tiada',
+    demoAlt: (name) => `Demonstrasi ${name}`,
+    viewDemo: 'Lihat demonstrasi',
+    viewDemoHint: 'Ketik untuk lihat pergerakan dan panduan bentuk',
     doThis: 'Buat begini',
     commonMistake: 'Kesilapan biasa',
     watchVideo: 'Tonton di YouTube',

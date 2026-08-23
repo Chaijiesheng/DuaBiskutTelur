@@ -668,6 +668,10 @@ export default {
 
     // Exercise demonstration
     howTo: 'ⓘ How',
+    demoUnavailable: 'Demonstration unavailable',
+    demoAlt: (name) => `${name} demonstration`,
+    viewDemo: 'View demonstration',
+    viewDemoHint: 'Tap to see the movement and the form cue',
     doThis: 'Do this',
     commonMistake: 'Common mistake',
     watchVideo: 'Watch on YouTube',

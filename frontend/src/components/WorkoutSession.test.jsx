@@ -134,7 +134,7 @@ describe('the how-to sheet', () => {
   it('opens from the demonstration panel', async () => {
     renderSession([exercise(0, 'Squat', 3)])
 
-    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+    await userEvent.click(screen.getByRole('button', { name: /workout\.viewDemo/ }))
 
     // Scoped to the sheet: the cue is also on the screen underneath, which the
     // sheet covers. Both showing it is correct — only one is ever visible.
@@ -151,7 +151,7 @@ describe('the how-to sheet', () => {
    */
   it('links out to the video safely', async () => {
     renderSession([exercise(0, 'Squat', 3)])
-    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+    await userEvent.click(screen.getByRole('button', { name: /workout\.viewDemo/ }))
 
     const link = screen.getByRole('link', { name: /workout\.watchVideo/ })
     expect(link.getAttribute('href')).toContain('youtube.com')
@@ -163,7 +163,7 @@ describe('the how-to sheet', () => {
   /** A link that cannot work must say why rather than failing after the tap. */
   it('explains the video is unavailable offline instead of offering a dead link', async () => {
     renderSession([exercise(0, 'Squat', 3)], { online: false })
-    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+    await userEvent.click(screen.getByRole('button', { name: /workout\.viewDemo/ }))
 
     expect(screen.queryByRole('link', { name: /workout\.watchVideo/ })).toBeNull()
     expect(screen.getByText('workout.watchVideoOffline')).toBeTruthy()
@@ -171,7 +171,7 @@ describe('the how-to sheet', () => {
 
   it('closes without touching the session', async () => {
     const { onLogSet } = renderSession([exercise(0, 'Squat', 3)])
-    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+    await userEvent.click(screen.getByRole('button', { name: /workout\.viewDemo/ }))
 
     await userEvent.click(screen.getByRole('button', { name: 'workout.close' }))
 
@@ -184,7 +184,7 @@ describe('the how-to sheet', () => {
   it('omits the sections it has nothing to put in', async () => {
     const bare = { ...exercise(0, 'Squat', 3), mistake: null, videoUrl: null }
     renderSession([bare])
-    await userEvent.click(screen.getByRole('button', { name: /workout\.howTo/ }))
+    await userEvent.click(screen.getByRole('button', { name: /workout\.viewDemo/ }))
 
     const sheet = screen.getByRole('dialog', { name: 'Squat' })
     expect(within(sheet).queryByText('workout.commonMistake')).toBeNull()
