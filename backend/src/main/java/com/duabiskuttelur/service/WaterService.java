@@ -93,7 +93,8 @@ public class WaterService {
         }
     }
 
-    private int targetFor(UserEntity user) {
+    /** Package-private so the trend report can state the same target the tracker uses. */
+    int targetFor(UserEntity user) {
         return user.getWaterTargetMl() != null ? user.getWaterTargetMl() : DEFAULT_TARGET_ML;
     }
 

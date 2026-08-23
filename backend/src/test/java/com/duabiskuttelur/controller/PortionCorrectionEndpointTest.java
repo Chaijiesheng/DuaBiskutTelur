@@ -3,6 +3,7 @@ package com.duabiskuttelur.controller;
 import com.duabiskuttelur.client.FeedbackClient;
 import com.duabiskuttelur.client.UsdaClient;
 import com.duabiskuttelur.client.VisionAnalysisClient;
+import com.duabiskuttelur.client.TrendNarrativeClient;
 import com.duabiskuttelur.client.WorkoutCoachClient;
 import com.duabiskuttelur.model.FeedbackResult;
 import com.duabiskuttelur.model.IdentifiedFood;
@@ -78,6 +79,14 @@ class PortionCorrectionEndpointTest {
      */
     @MockitoBean
     private WorkoutCoachClient workoutCoachClient;
+
+    /**
+     * GeminiClient implements this too, so without a stand-in here the bean
+     * override leaves one of its interfaces unsatisfied and every test in the
+     * class fails on context startup rather than on anything it asserts.
+     */
+    @MockitoBean
+    private TrendNarrativeClient trendNarrativeClient;
 
     @BeforeEach
     void stubProviders() {

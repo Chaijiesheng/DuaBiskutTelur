@@ -98,14 +98,16 @@ function wrapToLines(ctx, text, maxWidth, maxLines) {
   return lines
 }
 
-function drawLeaderRow(ctx, label, value, y, left, right, labelColour) {
+function drawLeaderRow(ctx, label, value, y, left, right, { colour, labelFont } = {}) {
   ctx.textBaseline = 'alphabetic'
-  // The label may be CJK (the menu tier names), which the monospace stack has
-  // no glyphs for — measure and draw it in whichever font is about to render
-  // it, or the dot leader starts in the wrong place.
-  ctx.font = labelColour ? `700 39px ${LABEL_FONT}` : `700 39px ${FONT}`
+  // The label may be CJK (the menu tier names, every trend label), which the
+  // monospace stack has no glyphs for — measure and draw it in whichever font
+  // is about to render it, or the dot leader starts in the wrong place. Stated
+  // as its own argument rather than inferred from the colour: a caller that
+  // wants CJK labels in plain ink had no way to ask for it.
+  ctx.font = `700 39px ${labelFont ?? FONT}`
   ctx.textAlign = 'left'
-  ctx.fillStyle = labelColour ?? INK
+  ctx.fillStyle = colour ?? INK
   ctx.fillText(label, left, y)
   const labelEnd = left + ctx.measureText(label).width
 
@@ -350,7 +352,8 @@ export async function buildMenuShareCard({
   const linesRight = WIDTH - MARGIN_X
   const linesLeft = linesRight - 497
   tierRows.slice(0, 5).forEach((row, i) => {
-    drawLeaderRow(ctx, row.label, String(row.count), 260 + i * 130, linesLeft, linesRight, row.colour)
+    drawLeaderRow(ctx, row.label, String(row.count), 260 + i * 130, linesLeft, linesRight,
+      { colour: row.colour, labelFont: LABEL_FONT })
   })
 
   const noteTop = 864
@@ -380,6 +383,165 @@ export async function buildMenuShareCard({
   drawTicketFooter(ctx, `MENU${String(dishCount).padStart(2, '0')}-${today()}`)
 
   ctx.restore()
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  return { blob, shareText }
+}
+
+// The trend chart's band, between the leader rows and the barcode strip.
+// Deeper than the meal card's note area because this is the only thing on the
+// card carrying a shape rather than a number, and at strip height its bars read
+// as a second barcode sitting above the real one.
+const CHART_TOP = 790
+const CHART_BOTTOM = 1010
+const GHOST = 'rgba(43, 42, 40, 0.07)'
+const STUB = 'rgba(43, 42, 40, 0.28)'
+
+/**
+ * Daily calories across the whole window, full bleed between the margins.
+ *
+ * Scaled to whichever is larger, the budget or the biggest day, so a day that
+ * went over is drawn *above* the dashed budget line rather than clipped at it.
+ * The on-screen chart scales to the budget alone and lets an over-budget bar
+ * overflow its box; a static image has nowhere to overflow to, and a bar
+ * silently cut off at the line would turn the one thing this chart exists to
+ * show into the one thing it hides.
+ */
+function drawDayBars(ctx, days, budget) {
+  if (!days?.length) return
+  const left = MARGIN_X
+  const width = WIDTH - MARGIN_X * 2
+  const height = CHART_BOTTOM - CHART_TOP
+  const peak = Math.max(budget || 0, ...days.map((d) => d.calories), 1)
+  const gap = days.length > 14 ? 3 : 8
+  const barWidth = (width - gap * (days.length - 1)) / days.length
+
+  if (budget > 0) {
+    const y = CHART_BOTTOM - (budget / peak) * height
+    ctx.strokeStyle = 'rgba(43, 42, 40, 0.55)'
+    ctx.lineWidth = 3
+    ctx.setLineDash([5, 8])
+    ctx.beginPath()
+    ctx.moveTo(left, y)
+    ctx.lineTo(left + width, y)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+
+  days.forEach((day, i) => {
+    const x = left + i * (barWidth + gap)
+    if (!day.logged) {
+      // A gap is data — that day was never logged. Drawn as a ghost column
+      // holding the whole slot, because at a bar's width an empty space is
+      // indistinguishable from a rendering fault, and a baseline stub on its own
+      // reads as a stray hairline rather than as a day with nothing in it.
+      ctx.fillStyle = GHOST
+      ctx.fillRect(x, CHART_TOP, barWidth, height)
+      ctx.fillStyle = STUB
+      ctx.fillRect(x, CHART_BOTTOM - 4, barWidth, 4)
+      return
+    }
+    const barHeight = Math.max(4, (day.calories / peak) * height)
+    ctx.fillStyle = day.overBudget ? STAMP_RED : INK
+    ctx.fillRect(x, CHART_BOTTOM - barHeight, barWidth, barHeight)
+  })
+}
+
+/**
+ * The trend equivalent: one week or one month on the same ticket.
+ *
+ * Where the meal card puts a photo, this puts the period and the average grade
+ * — a trend has no image, and the window it covers has to be stated before any
+ * figure on the card means anything. The chrome is shared with the other two
+ * (drawTicketChrome / dashedRule / drawTicketFooter) so all three read as the
+ * same object.
+ *
+ * What is deliberately not on it: body weight. It is on the report, it is in
+ * the PDF, and it is absent here on purpose — a share card goes into a group
+ * chat, and weight is the one figure in this app a user would not choose to
+ * broadcast. A share button that quietly includes it makes that decision on
+ * their behalf, once, irreversibly. The PDF is a different act: the user saves
+ * it and hands it to somebody they chose.
+ *
+ * @param rows [{ label, value }]; a row whose value is null is dropped, the
+ *             same "not enough to say" rule the report itself follows
+ */
+export async function buildTrendShareCard({
+  brandTitle, periodLabel, rangeLabel, period,
+  grade, daysLogged, daysInWindow, mealCount,
+  rows, days, calorieBudget, chartLabel, shareText,
+}) {
+  const canvas = document.createElement('canvas')
+  canvas.width = WIDTH
+  canvas.height = HEIGHT
+  const ctx = canvas.getContext('2d')
+
+  drawTicketChrome(ctx, brandTitle, `NO. ${String(mealCount ?? 0).padStart(4, '0')}`)
+
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = INK
+  ctx.font = `700 46px ${LABEL_FONT}`
+  ctx.fillText(periodLabel.toUpperCase(), MARGIN_X, 192)
+  ctx.fillStyle = 'rgba(43, 42, 40, 0.7)'
+  ctx.font = `500 32px ${LABEL_FONT}`
+  ctx.fillText(rangeLabel, MARGIN_X, 238)
+
+  // The stamp, standing where the meal card's photo does rather than overlapping
+  // it — there is nothing underneath for it to overlap, and the left column
+  // would read as empty without it.
+  const stampSize = 300
+  ctx.save()
+  ctx.globalAlpha = 0.85
+  ctx.globalCompositeOperation = 'multiply'
+  ctx.translate(MARGIN_X + 183, 440)
+  ctx.rotate((-14 * Math.PI) / 180)
+  ctx.beginPath()
+  ctx.arc(0, 0, stampSize / 2, 0, Math.PI * 2)
+  ctx.lineWidth = 10
+  ctx.strokeStyle = STAMP_RED
+  ctx.stroke()
+  ctx.fillStyle = STAMP_RED
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  // A window can be long enough to report on and still hold too few meals to
+  // average a grade. The stamp then carries the thing that is true — how much
+  // of the window was logged — rather than a grade nobody earned.
+  ctx.font = `700 ${grade ? 72 : 58}px ${FONT}`
+  ctx.fillText(grade ?? `${daysLogged}/${daysInWindow}`, 0, -14)
+  ctx.font = `700 26px ${FONT}`
+  ctx.fillText(grade ? 'AVG GRADE' : 'DAYS', 0, 46)
+  ctx.restore()
+
+  // The figures, right of the stamp -- and vertically centred on it, however
+  // many of them there are. The meal card can hang its rows from a fixed top
+  // because a photo fills the column beside them; here the only thing opposite
+  // is the stamp, and rows that start above it leave the card looking as though
+  // the bottom half failed to render.
+  const linesRight = WIDTH - MARGIN_X
+  const linesLeft = linesRight - 497
+  const shown = rows.filter((row) => row.value != null && row.value !== '')
+  const pitch = 104
+  const top = 250 + (416 - (shown.length - 1) * pitch) / 2
+  shown.forEach((row, i) => {
+    ctx.font = `700 39px ${LABEL_FONT}`
+    const label = truncateToWidth(ctx, row.label, 300)
+    drawLeaderRow(ctx, label, String(row.value), top + i * pitch, linesLeft, linesRight,
+      { labelFont: LABEL_FONT })
+  })
+
+  dashedRule(ctx, 720)
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = INK
+  ctx.font = `700 32px ${LABEL_FONT}`
+  ctx.fillText(chartLabel.toUpperCase(), MARGIN_X, 764)
+  drawDayBars(ctx, days, calorieBudget)
+
+  drawTicketFooter(ctx,
+    `${period === 'month' ? 'MO' : 'WK'}${String(daysLogged).padStart(2, '0')}-${today()}`)
+
+  ctx.restore() // lift the ticket clip
 
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
   return { blob, shareText }

@@ -3,6 +3,7 @@ package com.duabiskuttelur.controller;
 import com.duabiskuttelur.client.ProviderBusyException;
 import com.duabiskuttelur.model.AnalysisResponse;
 import com.duabiskuttelur.model.HistoryEntry;
+import com.duabiskuttelur.model.TrendReportResponse;
 import com.duabiskuttelur.model.PortionCorrectionRequest;
 import com.duabiskuttelur.model.RecentMealPoint;
 import com.duabiskuttelur.persistence.MealAnalysisEntity;
@@ -35,6 +36,10 @@ import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
+import com.duabiskuttelur.service.TrendPdfService;
+import com.duabiskuttelur.service.TrendReportService;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -52,17 +57,23 @@ public class AnalysisController {
 
     private final AnalysisService analysisService;
     private final UserService userService;
+    private final TrendReportService trendReportService;
+    private final TrendPdfService trendPdfService;
     private final PdfReportService pdfReportService;
     private final PortionCorrectionService portionCorrectionService;
     private final ObjectMapper mapper;
 
     public AnalysisController(AnalysisService analysisService, UserService userService,
                                PdfReportService pdfReportService,
-                               PortionCorrectionService portionCorrectionService, ObjectMapper mapper) {
+                               PortionCorrectionService portionCorrectionService,
+                               TrendReportService trendReportService,
+                               TrendPdfService trendPdfService, ObjectMapper mapper) {
         this.analysisService = analysisService;
         this.userService = userService;
         this.pdfReportService = pdfReportService;
         this.portionCorrectionService = portionCorrectionService;
+        this.trendReportService = trendReportService;
+        this.trendPdfService = trendPdfService;
         this.mapper = mapper;
     }
 
@@ -79,6 +90,51 @@ public class AnalysisController {
         // (user null -> no history row, so nothing survives a refresh).
         var user = userService.currentUserOrNull();
         return analysisService.analyze(image.getBytes(), mediaType, user, lang);
+    }
+
+    /**
+     * The weekly or monthly trend report.
+     *
+     * <p>Signed-in only, like every per-user read: the report is a comparison
+     * across days, and a visitor has no days to compare.
+     */
+    @GetMapping("/trends")
+    public TrendReportResponse trends(
+            @RequestParam(value = "period", required = false, defaultValue = "week") String period,
+            @RequestParam(value = "lang", required = false, defaultValue = "en") String lang) {
+        return trendReportService.report(
+                userService.currentUser(),
+                TrendReportService.Period.parse(period),
+                LocalDate.now(ZoneId.systemDefault()),
+                lang);
+    }
+
+    /**
+     * The trend report as a PDF, for taking somewhere the app is not.
+     *
+     * <p>Rendered in English regardless of the user's language: the base-14 PDF
+     * fonts cannot encode CJK, and a document that silently drops half its text
+     * is worse than one in a second language. The narrative is requested in
+     * English to match, rather than embedding a paragraph the page cannot draw.
+     */
+    @GetMapping("/trends/pdf")
+    public ResponseEntity<byte[]> trendsPdf(
+            @RequestParam(value = "period", required = false, defaultValue = "week") String period) {
+        TrendReportResponse report = trendReportService.report(
+                userService.currentUser(),
+                TrendReportService.Period.parse(period),
+                LocalDate.now(ZoneId.systemDefault()),
+                "en");
+        byte[] pdf = trendPdfService.render(report);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDisposition(ContentDisposition.attachment()
+                .filename(TrendPdfService.filenameFor(report))
+                .build());
+        return ResponseEntity.ok()
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
     }
 
     @GetMapping("/history")

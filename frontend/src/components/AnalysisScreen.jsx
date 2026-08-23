@@ -5,6 +5,7 @@ import WeeklyCaloriesChart, { getWeeklyDays } from './WeeklyCaloriesChart.jsx'
 import WeightTrendCard from './WeightTrendCard.jsx'
 import WaterTrackerCard from './WaterTrackerCard.jsx'
 import WorkoutAnalysisSection from './WorkoutAnalysisSection.jsx'
+import TrendReport from './TrendReport.jsx'
 import { useLanguage } from '../i18n/LanguageContext.jsx'
 import { AnalysisSkeleton } from './Skeleton.jsx'
 
@@ -113,7 +114,7 @@ export default function AnalysisScreen({ isVisitor, dailyBudget, goal }) {
         </p>
       </section>
 
-      <p className="px-1 text-center text-xs text-slate-600 dark:text-slate-300">{t('analysis.comingSoon')}</p>
+      <TrendReport />
     </div>
   )
 }

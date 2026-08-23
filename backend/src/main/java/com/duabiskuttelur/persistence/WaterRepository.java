@@ -45,6 +45,14 @@ public interface WaterRepository extends JpaRepository<WaterEntity, Long> {
     List<WaterEntity> findByUserIdOrderByDateDesc(Long userId);
 
     /**
+     * Water inside a reporting window. Bounded by date rather than reading the
+     * user's whole history, and served by the UNIQUE(user_id, date) index that
+     * V6 already created -- equality then a range, the same shape as the meal
+     * query above.
+     */
+    List<WaterEntity> findByUserIdAndDateBetween(Long userId, LocalDate from, LocalDate to);
+
+    /**
      * Bulk delete for account deletion. A derived {@code deleteByUserId} would
      * load every row into the persistence context and remove them one at a
      * time; this is one statement, and the row count gives the deletion

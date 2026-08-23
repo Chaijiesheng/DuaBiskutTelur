@@ -3,6 +3,7 @@ package com.duabiskuttelur.persistence;
 import com.duabiskuttelur.model.DailyMealFact;
 import com.duabiskuttelur.model.HistoryEntry;
 import com.duabiskuttelur.model.RecentMealPoint;
+import com.duabiskuttelur.model.TrendMealRow;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -113,4 +114,29 @@ public interface MealAnalysisRepository extends JpaRepository<MealAnalysisEntity
              order by e.createdAt desc
             """)
     List<RecentMealPoint> findPointsSince(@Param("userId") Long userId, @Param("from") Instant from);
+
+    /**
+     * Every meal inside a reporting window, six narrow columns wide.
+     *
+     * <p>A closed range rather than {@code >= from}, because a report has an
+     * end as well as a start: last month's report must not pick up this
+     * month's meals the moment the calendar rolls over.
+     *
+     * <p>Grouping by day is deliberately left to Java. The rows carry an
+     * Instant and the day a meal belongs to depends on the user's timezone, so
+     * bucketing in SQL means a timezone conversion inside the predicate --
+     * which differs between H2 and Postgres and would stop this seeking
+     * idx_meal_analysis_user_created. Equality on user_id then a range on
+     * created_at is exactly the shape that index exists for.
+     */
+    @Query("""
+            select new com.duabiskuttelur.model.TrendMealRow(
+                       e.createdAt, e.score, e.calories, e.protein, e.vegetableCount, e.hasFruit)
+              from MealAnalysisEntity e
+             where e.userId = :userId and e.createdAt >= :from and e.createdAt < :until
+             order by e.createdAt asc
+            """)
+    List<TrendMealRow> findTrendRows(@Param("userId") Long userId,
+                                     @Param("from") Instant from,
+                                     @Param("until") Instant until);
 }

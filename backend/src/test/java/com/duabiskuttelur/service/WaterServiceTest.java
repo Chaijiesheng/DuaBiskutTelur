@@ -108,6 +108,14 @@ class WaterServiceTest {
      * race-recovery path is exercised rather than assumed.
      */
     private static class FakeRepository implements WaterRepository {
+
+        /** Unused here: this fake serves the daily water tracker only. */
+        @Override
+        public java.util.List<com.duabiskuttelur.persistence.WaterEntity> findByUserIdAndDateBetween(
+                Long userId, java.time.LocalDate from, java.time.LocalDate to) {
+            return java.util.List.of();
+        }
+
         final List<WaterEntity> entries = new ArrayList<>();
         /** Hook for simulating a competing request inserting first. */
         Runnable beforeInsert = () -> { };

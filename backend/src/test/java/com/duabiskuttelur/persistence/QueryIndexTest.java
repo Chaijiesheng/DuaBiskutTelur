@@ -68,6 +68,7 @@ class QueryIndexTest {
             "MealAnalysisRepository#findAchievementFacts",
             "MealAnalysisRepository#findLegacyAchievementFacts",
             "MealAnalysisRepository#findPointsSince",
+            "MealAnalysisRepository#findTrendRows",
             "MealAnalysisRepository#deleteByUserId",
             // primary key
             "MealAnalysisRepository#findByIdAndUserId",
@@ -84,6 +85,7 @@ class QueryIndexTest {
             "WeightRepository#deleteByUserId",
             // uk_water_entry_user_date (V6)
             "WaterRepository#findByUserIdAndDate",
+            "WaterRepository#findByUserIdAndDateBetween",
             "WaterRepository#adjustTotal",
             "WaterRepository#findByUserIdOrderByDateDesc",
             "WaterRepository#deleteByUserId",
@@ -317,6 +319,22 @@ class QueryIndexTest {
                         + " FROM meal_analysis WHERE user_id = 3 ORDER BY created_at DESC LIMIT 50");
     }
 
+    /**
+     * TrendReportService.load via findTrendRows — the weekly and monthly report
+     * window. The same index as the list above: equality on user_id, then a
+     * range on created_at. Bucketing into days happens in Java precisely so
+     * this predicate stays a plain range and keeps seeking.
+     */
+    @Test
+    void theTrendWindowSeeksTheUserCreatedIndex() throws SQLException {
+        assertUsesIndex("IDX_MEAL_ANALYSIS_USER_CREATED",
+                "SELECT created_at, score, calories, protein, vegetable_count, has_fruit"
+                        + " FROM meal_analysis WHERE user_id = 3"
+                        + " AND created_at >= TIMESTAMP '2026-07-20 00:00:00'"
+                        + " AND created_at < TIMESTAMP '2026-08-21 00:00:00'"
+                        + " ORDER BY created_at ASC");
+    }
+
     @Test
     void todaysDashboardRangeSeeksTheUserCreatedIndex() throws SQLException {
         // DashboardService.todaysEntries via findDailyFacts — the same index as
@@ -410,6 +428,19 @@ class QueryIndexTest {
         assertUsesIndex("UK_WATER_ENTRY_USER_DATE",
                 "UPDATE water_entry SET total_ml = total_ml + 250"
                         + " WHERE user_id = 3 AND date = DATE '2026-01-01'");
+    }
+
+    /**
+     * WaterRepository.findByUserIdAndDateBetween — the trend report's water
+     * window. The same unique constraint as the per-day lookup above, read as a
+     * range rather than a point, which is the case a two-column constraint
+     * still covers only if user_id leads it.
+     */
+    @Test
+    void theTrendsWaterWindowIsCoveredByTheSameConstraint() throws SQLException {
+        assertUsesIndex("UK_WATER_ENTRY_USER_DATE",
+                "SELECT * FROM water_entry WHERE user_id = 3"
+                        + " AND date BETWEEN DATE '2026-07-22' AND DATE '2026-08-20'");
     }
 
     /**

@@ -63,7 +63,8 @@ import java.util.concurrent.TimeUnit;
  * </ul>
  */
 @Component
-public class GeminiClient implements VisionAnalysisClient, FeedbackClient, WorkoutCoachClient {
+public class GeminiClient implements VisionAnalysisClient, FeedbackClient, WorkoutCoachClient,
+        TrendNarrativeClient {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiClient.class);
 
@@ -342,6 +343,21 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
         return object;
     }
 
+    /**
+     * Generation settings for a call whose answer is a paragraph rather than a
+     * structure.
+     *
+     * <p>Separate from {@link #generationConfig} because that one pins
+     * responseMimeType to application/json and requires a schema; wrapping a
+     * single string in JSON would spend output tokens on packaging and give the
+     * parser something to fail on for no benefit.
+     */
+    private static Map<String, Object> proseConfig(int maxOutputTokens) {
+        return Map.of(
+                "maxOutputTokens", maxOutputTokens,
+                "responseMimeType", "text/plain");
+    }
+
     private static Map<String, Object> generationConfig(int maxOutputTokens, Map<String, Object> schema) {
         return Map.of(
                 "maxOutputTokens", maxOutputTokens,
@@ -615,6 +631,37 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
         String text = callWithRetry(props.getGeminiFeedbackModels(), body,
                 props.getGeminiFeedbackBudgetMs(), "workout-coach", standard);
         return read.apply(extractJson(text, '{', '}'));
+    }
+
+    private static final String TREND_SYSTEM_PROMPT = """
+            You write one short paragraph summarising a nutrition tracking report.             Every figure you are given has already been calculated; treat them as facts and             never compute, adjust, round or invent a number. Do not add figures that are not             in the input. Two or three sentences, warm and specific, no bullet points, no             markdown, no heading. Lead with what went well, then name at most one thing worth             improving. Address the reader as "you". Plain text only.""";
+
+    /**
+     * The trend report's one written paragraph.
+     *
+     * <p>Runs on the feedback chain and its shorter budget, like every other
+     * prose path: TrendNarrator has a rule-based paragraph ready, so this is
+     * the wrong place to spend the vision budget a second time.
+     *
+     * <p>No response schema, unlike the coach and feedback calls -- the answer
+     * is one paragraph, and asking for JSON around a single string spends
+     * thinking tokens on packaging. Returns null rather than throwing when the
+     * provider gives back nothing usable; the caller treats that as a miss and
+     * falls back.
+     */
+    @Override
+    public String narrate(String context, String languageName) {
+        Map<String, Object> body = Map.of(
+                "systemInstruction", Map.of("parts", List.of(Map.of(
+                        "text", TREND_SYSTEM_PROMPT + languageRule(languageName)))),
+                "contents", List.of(Map.of(
+                        "role", "user",
+                        "parts", List.of(Map.of("text", context)))),
+                "generationConfig", proseConfig(512));
+
+        String text = callWithRetry(props.getGeminiFeedbackModels(), body,
+                props.getGeminiFeedbackBudgetMs(), "trend-narrative", standard);
+        return text == null || text.isBlank() ? null : text.trim();
     }
 
     private <T> T readCoachJson(String json, Class<T> type, String what) {

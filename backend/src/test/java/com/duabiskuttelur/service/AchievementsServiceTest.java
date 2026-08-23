@@ -33,6 +33,14 @@ class AchievementsServiceTest {
 
     /** In-memory fake repository so we don't need a real Spring context. */
     private static class FakeRepository implements MealAnalysisRepository {
+
+        /** Unused here: this fake serves the achievements queries only. */
+        @Override
+        public java.util.List<com.duabiskuttelur.model.TrendMealRow> findTrendRows(
+                Long userId, java.time.Instant from, java.time.Instant until) {
+            return java.util.List.of();
+        }
+
         final List<MealAnalysisEntity> entries = new ArrayList<>();
 
         @Override

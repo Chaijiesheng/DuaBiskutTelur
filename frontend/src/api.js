@@ -196,6 +196,24 @@ export async function fetchDashboardToday() {
   return response.json()
 }
 
+/**
+ * The weekly or monthly trend report; auth required.
+ *
+ * <p>Deliberately its own call rather than something derived from the cached
+ * history: the report spans a month and compares against the month before it,
+ * which the fifty-row history page cannot see. The backend computes every
+ * figure, so nothing here re-derives a number the report already states.
+ */
+export async function fetchTrendReport(period = 'week', lang = 'en') {
+  const response = await apiFetch(
+    `/api/trends?period=${encodeURIComponent(period)}&lang=${encodeURIComponent(lang)}`,
+  )
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json()
+}
+
 /** Total meals logged, current logging streak, and badge unlock states; auth required. */
 export async function fetchAchievements(lang = 'en') {
   const response = await apiFetch(`/api/achievements?lang=${encodeURIComponent(lang)}`)
@@ -373,6 +391,23 @@ export async function exportHistoryPdf(id) {
     throw await toApiError(response)
   }
   saveAs(await response.blob(), `duabiskuttelur-report-${id}.pdf`)
+}
+
+/**
+ * Downloads the trend report as a PDF.
+ *
+ * <p>The filename comes from the server's Content-Disposition rather than being
+ * rebuilt here: the document states the period it covers, and a name assembled
+ * on the client could disagree with the dates printed inside it.
+ */
+export async function exportTrendPdf(period = 'week') {
+  const response = await apiFetch(`/api/trends/pdf?period=${encodeURIComponent(period)}`)
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const named = /filename="?([^";]+)"?/i.exec(disposition)
+  saveAs(await response.blob(), named ? named[1] : `duabiskuttelur-${period}.pdf`)
 }
 
 /** Downloads everything the account holds as a JSON file (profile, meals, menu scans, water, weight). */
