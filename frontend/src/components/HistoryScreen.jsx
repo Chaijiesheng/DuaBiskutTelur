@@ -81,7 +81,7 @@ function MealsHistory({ isVisitor, onDeleteVisitorEntry, dailyBudget }) {
   const gradeColors = GRADE_COLORS[theme]
   // One shared, cached copy — this screen and the Analysis tab used to fetch it
   // separately and again on every tab switch.
-  const { entries, recent, loading, error, removeEntry } = useHistory()
+  const { entries, recent, loading, error, removeEntry, hasMore, loadingMore, moreError, loadMore } = useHistory()
   // Pop-out shown first when there's nothing to display; clicking its CTA
   // reveals the plain empty-history view underneath. Re-rolled each time the
   // tab is opened (component remounts on tab switch).
@@ -247,6 +247,25 @@ function MealsHistory({ isVisitor, onDeleteVisitorEntry, dailyBudget }) {
           </li>
         ))}
       </ul>
+
+      {hasMore && (
+        <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            aria-busy={loadingMore}
+            className="min-h-[3rem] w-full rounded-2xl border border-slate-200 bg-white text-sm font-bold text-slate-700 shadow-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            {loadingMore ? t('history.loadingMore') : t('history.showMore')}
+          </button>
+          {moreError && (
+            <p role="alert" className="text-center text-xs text-amber-600 dark:text-amber-400">
+              {t('history.couldntLoadMore')}
+            </p>
+          )}
+        </div>
+      )}
 
       {actionsFor && (
         <Dialog

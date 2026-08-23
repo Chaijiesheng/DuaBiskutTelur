@@ -29,9 +29,36 @@ public interface MealAnalysisRepository extends JpaRepository<MealAnalysisEntity
                                                              e.calories, e.summary, e.thumbnail, e.source)
               from MealAnalysisEntity e
              where e.userId = :userId
-             order by e.createdAt desc
+             order by e.createdAt desc, e.id desc
             """)
     List<HistoryEntry> findHistoryEntries(@Param("userId") Long userId, Pageable page);
+
+    /**
+     * The next page of the same list, keyed on the last row the client saw.
+     *
+     * <p>Offset paging is wrong by construction on a feed that grows at the
+     * top: log a meal between page one and page two and every row shifts down
+     * one, so page two repeats the row that was fiftieth and the meal above it
+     * is never shown at all. A cursor is immune -- new rows land above it and
+     * deleted rows simply are not there.
+     *
+     * <p>The cursor is {@code (createdAt, id)} rather than {@code createdAt}
+     * alone because a timestamp is not a total order. Two meals sharing an
+     * instant would straddle the boundary, and the failure is silent: a meal
+     * that is in the database and on no page of the list.
+     */
+    @Query("""
+            select new com.duabiskuttelur.model.HistoryEntry(e.id, e.createdAt, e.score, e.grade,
+                                                             e.calories, e.summary, e.thumbnail, e.source)
+              from MealAnalysisEntity e
+             where e.userId = :userId
+               and (e.createdAt < :before or (e.createdAt = :before and e.id < :beforeId))
+             order by e.createdAt desc, e.id desc
+            """)
+    List<HistoryEntry> findHistoryEntriesBefore(@Param("userId") Long userId,
+                                                @Param("before") Instant before,
+                                                @Param("beforeId") Long beforeId,
+                                                Pageable page);
 
     Optional<MealAnalysisEntity> findByIdAndUserId(Long id, Long userId);
 

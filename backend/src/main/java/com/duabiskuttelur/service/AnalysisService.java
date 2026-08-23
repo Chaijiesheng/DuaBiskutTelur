@@ -8,6 +8,7 @@ import com.duabiskuttelur.model.IdentifiedFood;
 import com.duabiskuttelur.model.FeedbackResult;
 import com.duabiskuttelur.model.FoodItem;
 import com.duabiskuttelur.model.HistoryEntry;
+import com.duabiskuttelur.model.HistoryPage;
 import com.duabiskuttelur.model.RecentMealPoint;
 import com.duabiskuttelur.model.Totals;
 import com.duabiskuttelur.persistence.MealAnalysisEntity;
@@ -22,6 +23,7 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -453,8 +455,23 @@ public class AnalysisService {
      */
     public static final int HISTORY_PAGE_SIZE = 50;
 
-    public List<HistoryEntry> history(Long userId) {
-        return repository.findHistoryEntries(userId, PageRequest.of(0, HISTORY_PAGE_SIZE));
+    /**
+     * One page of the history list, oldest-ward of {@code before}/{@code
+     * beforeId} when they are given and from the top when they are not.
+     *
+     * <p>Asks the database for one row more than it hands back, so "is there
+     * another page" costs nothing beyond the page itself -- a count over the
+     * user's entire history on every tap of Show more would read far more than
+     * the page it is describing.
+     */
+    public HistoryPage history(Long userId, Instant before, Long beforeId) {
+        Pageable page = PageRequest.of(0, HISTORY_PAGE_SIZE + 1);
+        List<HistoryEntry> rows = before == null
+                ? repository.findHistoryEntries(userId, page)
+                : repository.findHistoryEntriesBefore(userId, before, beforeId, page);
+        boolean hasMore = rows.size() > HISTORY_PAGE_SIZE;
+        return new HistoryPage(hasMore ? List.copyOf(rows.subList(0, HISTORY_PAGE_SIZE)) : List.copyOf(rows),
+                hasMore);
     }
 
     /**

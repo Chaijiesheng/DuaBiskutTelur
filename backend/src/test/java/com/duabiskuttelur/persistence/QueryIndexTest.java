@@ -69,6 +69,7 @@ class QueryIndexTest {
             "MealAnalysisRepository#findLegacyAchievementFacts",
             "MealAnalysisRepository#findPointsSince",
             "MealAnalysisRepository#findTrendRows",
+            "MealAnalysisRepository#findHistoryEntriesBefore",
             "MealAnalysisRepository#deleteByUserId",
             // primary key
             "MealAnalysisRepository#findByIdAndUserId",
@@ -313,10 +314,32 @@ class QueryIndexTest {
     @Test
     void historyListSeeksTheUserCreatedIndexInsteadOfScanning() throws SQLException {
         // MealAnalysisRepository.findHistoryEntries — a projection, so result_json
-        // is absent from the column list on purpose (DB4).
+        // is absent from the column list on purpose (DB4). Fifty-one rows: the
+        // page asks for one more than it returns, to learn whether there is
+        // another page without a second count query.
         assertUsesIndex("IDX_MEAL_ANALYSIS_USER_CREATED",
                 "SELECT id, created_at, score, grade, calories, summary, thumbnail, source"
-                        + " FROM meal_analysis WHERE user_id = 3 ORDER BY created_at DESC LIMIT 50");
+                        + " FROM meal_analysis WHERE user_id = 3"
+                        + " ORDER BY created_at DESC, id DESC LIMIT 51");
+    }
+
+    /**
+     * MealAnalysisRepository.findHistoryEntriesBefore — every page after the
+     * first.
+     *
+     * <p>The one that needed checking rather than assuming: the cursor
+     * predicate is an OR, and an OR is exactly the shape that talks a planner
+     * out of a seek and into reading the user's whole history for every tap of
+     * Show more.
+     */
+    @Test
+    void pagingPastTheFirstPageStillSeeksTheUserCreatedIndex() throws SQLException {
+        assertUsesIndex("IDX_MEAL_ANALYSIS_USER_CREATED",
+                "SELECT id, created_at, score, grade, calories, summary, thumbnail, source"
+                        + " FROM meal_analysis WHERE user_id = 3"
+                        + " AND (created_at < TIMESTAMP '2026-08-20 10:00:00'"
+                        + " OR (created_at = TIMESTAMP '2026-08-20 10:00:00' AND id < 900))"
+                        + " ORDER BY created_at DESC, id DESC LIMIT 51");
     }
 
     /**

@@ -146,7 +146,7 @@ class HotReadQueryShapeTest {
         saveMeal("Char kway teow", 25.0);
         statements.list.clear();
 
-        List<HistoryEntry> history = analysisService.history(user.getId());
+        List<HistoryEntry> history = analysisService.history(user.getId(), null, null).entries();
 
         assertEquals(2, history.size());
         assertEquals(BIG_THUMBNAIL, history.get(0).thumbnail(), "the list still needs its thumbnails");

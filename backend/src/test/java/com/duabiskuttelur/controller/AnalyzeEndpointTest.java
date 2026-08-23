@@ -133,7 +133,7 @@ class AnalyzeEndpointTest {
 
         mockMvc.perform(get("/api/history").with(googleUser()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].grade").value(not("")));
+                .andExpect(jsonPath("$.entries[0].grade").value(not("")));
     }
 
     @Test
@@ -177,7 +177,8 @@ class AnalyzeEndpointTest {
         });
         mockMvc.perform(get("/api/history").with(freshUser))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(jsonPath("$.entries.length()").value(0))
+                .andExpect(jsonPath("$.hasMore").value(false));
     }
 
     @Test
@@ -206,7 +207,7 @@ class AnalyzeEndpointTest {
         });
         mockMvc.perform(get("/api/history").with(otherUser))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(jsonPath("$.entries.length()").value(0));
     }
 
     @Test
@@ -344,7 +345,7 @@ class AnalyzeEndpointTest {
         String historyJson = mockMvc.perform(get("/api/history").with(owner))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        long entryId = com.jayway.jsonpath.JsonPath.parse(historyJson).read("$[0].id", Long.class);
+        long entryId = com.jayway.jsonpath.JsonPath.parse(historyJson).read("$.entries[0].id", Long.class);
 
         // Visitors/unauthenticated callers can't export.
         mockMvc.perform(get("/api/history/" + entryId + "/pdf"))
@@ -385,7 +386,7 @@ class AnalyzeEndpointTest {
         String historyJson = mockMvc.perform(get("/api/history").with(owner))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        long entryId = com.jayway.jsonpath.JsonPath.parse(historyJson).read("$[0].id", Long.class);
+        long entryId = com.jayway.jsonpath.JsonPath.parse(historyJson).read("$.entries[0].id", Long.class);
 
         // Unauthenticated callers can't delete.
         mockMvc.perform(delete("/api/history/" + entryId))
@@ -403,7 +404,7 @@ class AnalyzeEndpointTest {
         // Still there for the owner.
         mockMvc.perform(get("/api/history").with(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1));
+                .andExpect(jsonPath("$.entries.length()").value(1));
 
         // The owner can delete it, and it's gone afterward.
         mockMvc.perform(delete("/api/history/" + entryId).with(owner))
@@ -411,7 +412,7 @@ class AnalyzeEndpointTest {
 
         mockMvc.perform(get("/api/history").with(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(jsonPath("$.entries.length()").value(0));
 
         // Deleting it again 404s — it's already gone.
         mockMvc.perform(delete("/api/history/" + entryId).with(owner))
@@ -469,13 +470,64 @@ class AnalyzeEndpointTest {
 
         mockMvc.perform(get("/api/history").with(recentWindowUser()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(50));
+                .andExpect(jsonPath("$.entries.length()").value(50))
+                .andExpect(jsonPath("$.hasMore").value(true));
 
         mockMvc.perform(get("/api/history/recent").with(recentWindowUser()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(55))
                 .andExpect(jsonPath("$[0].calories").exists())
                 .andExpect(jsonPath("$[0].createdAt").exists());
+    }
+
+    /**
+     * The cursor, over HTTP.
+     *
+     * <p>The service tests page the list directly, so none of them would notice
+     * that {@code before} arrives as an ISO string and has to bind to an
+     * {@code Instant}. If that conversion did not work, every page after the
+     * first would 400 in production with the whole suite green.
+     */
+    @Test
+    void theHistoryCursorRoundTripsThroughTheQueryString() throws Exception {
+        RequestPostProcessor pager = oauth2Login().attributes(attrs -> {
+            attrs.put("sub", "cursor-user");
+            attrs.put("email", "cursor@example.com");
+            attrs.put("name", "Cursor User");
+        });
+        Mockito.when(visionClient.identifyFoods(any(), anyString()))
+                .thenReturn(List.of(identifiedFood("Rice", "grain", false, 200)));
+        MockMultipartFile image = new MockMultipartFile("image", "meal.jpg", "image/jpeg", FAKE_JPEG);
+        for (int i = 0; i < 3; i++) {
+            mockMvc.perform(multipart("/api/analyze").file(image).with(pager)).andExpect(status().isOk());
+        }
+
+        String firstPage = mockMvc.perform(get("/api/history").with(pager))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String lastCreatedAt = com.jayway.jsonpath.JsonPath.parse(firstPage).read("$.entries[2].createdAt");
+        long lastId = com.jayway.jsonpath.JsonPath.parse(firstPage).read("$.entries[2].id", Long.class);
+
+        mockMvc.perform(get("/api/history")
+                        .param("before", lastCreatedAt)
+                        .param("beforeId", String.valueOf(lastId))
+                        .with(pager))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.entries.length()").value(0))
+                .andExpect(jsonPath("$.hasMore").value(false));
+    }
+
+    /**
+     * Half a cursor is rejected rather than quietly serving page one — which
+     * would leave Show more handing back the rows already on screen forever,
+     * looking like a list that will not advance rather than like a bug.
+     */
+    @Test
+    void theHistoryEndpointRejectsHalfACursor() throws Exception {
+        mockMvc.perform(get("/api/history").param("before", "2026-08-20T10:00:00Z").with(googleUser()))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/history").param("beforeId", "7").with(googleUser()))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

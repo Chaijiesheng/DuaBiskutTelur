@@ -223,8 +223,19 @@ export async function fetchAchievements(lang = 'en') {
   return response.json()
 }
 
-export async function fetchHistory() {
-  const response = await apiFetch('/api/history')
+/**
+ * One page of the meal history: `{ entries, hasMore }`.
+ *
+ * <p>Pass the last entry already on screen to get the page behind it. The
+ * cursor names a row rather than counting from the top, so a meal logged or
+ * deleted between two pages cannot make the next page repeat a row or skip one
+ * — which on a food log is the normal case, not the edge case.
+ */
+export async function fetchHistory(cursor) {
+  const query = cursor
+    ? `?before=${encodeURIComponent(cursor.before)}&beforeId=${encodeURIComponent(cursor.beforeId)}`
+    : ''
+  const response = await apiFetch(`/api/history${query}`)
   if (!response.ok) {
     throw await toApiError(response)
   }
@@ -233,8 +244,9 @@ export async function fetchHistory() {
 
 /**
  * Every meal in the trailing window, uncapped — the inputs to the weekly trend.
- * Separate from fetchHistory() because that one is capped at 50 rows, which
- * silently truncated the weekly totals for anyone logging often.
+ * Separate from fetchHistory() because that one arrives a page at a time, and
+ * a total assembled from whichever pages the user happened to scroll would
+ * change as they scrolled.
  */
 export async function fetchRecentHistory(days = 7) {
   const response = await apiFetch(`/api/history/recent?days=${days}`)

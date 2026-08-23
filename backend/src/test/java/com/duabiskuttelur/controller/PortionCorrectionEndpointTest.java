@@ -211,7 +211,7 @@ class PortionCorrectionEndpointTest {
                 .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/history").with(owner()))
-                .andExpect(jsonPath("$[0].calories").value(
+                .andExpect(jsonPath("$.entries[0].calories").value(
                         org.hamcrest.Matchers.closeTo(before.path("totals").path("calories").asDouble() / 2, 0.3)));
     }
 

@@ -2,7 +2,7 @@ package com.duabiskuttelur.controller;
 
 import com.duabiskuttelur.client.ProviderBusyException;
 import com.duabiskuttelur.model.AnalysisResponse;
-import com.duabiskuttelur.model.HistoryEntry;
+import com.duabiskuttelur.model.HistoryPage;
 import com.duabiskuttelur.model.TrendReportResponse;
 import com.duabiskuttelur.model.PortionCorrectionRequest;
 import com.duabiskuttelur.model.RecentMealPoint;
@@ -38,6 +38,7 @@ import org.springframework.web.multipart.support.MissingServletRequestPartExcept
 
 import com.duabiskuttelur.service.TrendPdfService;
 import com.duabiskuttelur.service.TrendReportService;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.io.IOException;
@@ -137,9 +138,22 @@ public class AnalysisController {
                 .body(pdf);
     }
 
+    /**
+     * The history list, a page at a time.
+     *
+     * <p>A cursor is both halves or neither. Serving page one for a malformed
+     * cursor would leave Show more handing back the rows already on screen
+     * forever, which looks like a list that will not advance rather than like
+     * the bug it is -- so a half-cursor is rejected where it can be seen.
+     */
     @GetMapping("/history")
-    public List<HistoryEntry> history() {
-        return analysisService.history(userService.currentUser().getId());
+    public HistoryPage history(
+            @RequestParam(value = "before", required = false) Instant before,
+            @RequestParam(value = "beforeId", required = false) Long beforeId) {
+        if ((before == null) != (beforeId == null)) {
+            throw new IllegalArgumentException("before and beforeId must be supplied together");
+        }
+        return analysisService.history(userService.currentUser().getId(), before, beforeId);
     }
 
     /**

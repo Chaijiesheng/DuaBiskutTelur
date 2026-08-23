@@ -71,6 +71,7 @@ class AchievementsServiceTest {
         }
 
         @Override public List<com.duabiskuttelur.model.HistoryEntry> findHistoryEntries(Long userId, org.springframework.data.domain.Pageable page) { return List.of(); }
+        @Override public List<com.duabiskuttelur.model.HistoryEntry> findHistoryEntriesBefore(Long userId, Instant before, Long beforeId, org.springframework.data.domain.Pageable page) { return List.of(); }
         @Override public Optional<MealAnalysisEntity> findByIdAndUserId(Long id, Long userId) { return Optional.empty(); }
         @Override public List<com.duabiskuttelur.model.DailyMealFact> findDailyFacts(Long userId, Instant start, Instant end) { return List.of(); }
         @Override public List<String> findResultJsonByIds(List<Long> ids) { return List.of(); }
