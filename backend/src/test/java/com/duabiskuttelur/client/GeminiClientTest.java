@@ -145,6 +145,123 @@ class GeminiClientTest {
 
     /** Menu scans run their own model chain and read timeout, not the vision ones. */
 
+
+    /**
+     * The bug this suite exists to stop coming back: a three-model fallback
+     * chain that could only ever reach the first model.
+     *
+     * <p>The old guard refused any attempt that could not fit a FULL read
+     * timeout inside the remaining budget. With a budget of exactly two
+     * timeouts, the first call burning its whole allowance left the check
+     * landing a hair past the deadline, so the second model was never dialled
+     * and a healthy provider was reported busy. Production ran 60s of budget
+     * against a 30s timeout -- precisely this shape.
+     */
+    @Test
+    void reachesTheSecondModelWhenTheFirstBurnsItsWholeReadTimeout() throws Exception {
+        int readTimeoutMs = 1_000;
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.setExecutor(Executors.newCachedThreadPool());
+        List<String> hits = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        server.createContext("/v1beta/models/slow:generateContent", exchange -> {
+            hits.add("slow");
+            try {
+                Thread.sleep(readTimeoutMs * 3L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        server.createContext("/v1beta/models/healthy:generateContent", exchange -> {
+            hits.add("healthy");
+            respondOk(exchange, "\"[]\"");
+        });
+        server.start();
+
+        AppProperties props = propsFor(server.getAddress().getPort(), readTimeoutMs,
+                List.of("slow", "healthy"));
+        props.setGeminiBudgetMs(readTimeoutMs * 2);
+        GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
+
+        assertDoesNotThrow(() -> client.identifyFoods(FAKE_IMAGE, "image/jpeg"),
+                "the healthy fallback model was never dialled - the budget guard refused it");
+        assertTrue(hits.contains("healthy"), "expected the chain to reach the second model, got " + hits);
+    }
+
+    /**
+     * When less than a full call fits but more than a token amount does, the
+     * attempt is shortened rather than abandoned. Throwing the remainder away
+     * is what made the chain give up early; spending it is free.
+     */
+    @Test
+    void shortensTheLastAttemptToWhateverBudgetIsLeft() throws Exception {
+        int readTimeoutMs = 1_000;
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.setExecutor(Executors.newCachedThreadPool());
+        List<String> hits = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        server.createContext("/v1beta/models/slow:generateContent", exchange -> {
+            hits.add("slow");
+            try {
+                Thread.sleep(readTimeoutMs * 3L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        server.createContext("/v1beta/models/quick:generateContent", exchange -> {
+            hits.add("quick");
+            respondOk(exchange, "\"[]\"");
+        });
+        server.start();
+
+        AppProperties props = propsFor(server.getAddress().getPort(), readTimeoutMs,
+                List.of("slow", "quick"));
+        // Only half a call's worth left after the first one hangs.
+        props.setGeminiBudgetMs(readTimeoutMs + readTimeoutMs / 2);
+        GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
+
+        assertDoesNotThrow(() -> client.identifyFoods(FAKE_IMAGE, "image/jpeg"));
+        assertTrue(hits.contains("quick"),
+                "a partial budget should still buy a shortened attempt, got " + hits);
+    }
+
+    /**
+     * The other half of the rule: a sliver of budget is not worth a request.
+     * Without a floor, shortening would degenerate into dialling a struggling
+     * provider with milliseconds to answer in.
+     */
+    @Test
+    void doesNotDialAModelWithAlmostNoBudgetLeft() throws Exception {
+        int readTimeoutMs = 1_000;
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.setExecutor(Executors.newCachedThreadPool());
+        List<String> hits = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        server.createContext("/v1beta/models/slow:generateContent", exchange -> {
+            hits.add("slow");
+            try {
+                Thread.sleep(readTimeoutMs * 3L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        server.createContext("/v1beta/models/never:generateContent", exchange -> {
+            hits.add("never");
+            respondOk(exchange, "\"[]\"");
+        });
+        server.start();
+
+        AppProperties props = propsFor(server.getAddress().getPort(), readTimeoutMs,
+                List.of("slow", "never"));
+        // One full call plus a sliver - under the quarter-timeout floor.
+        props.setGeminiBudgetMs(readTimeoutMs + 100);
+        GeminiClient client = new GeminiClient(props, new ObjectMapper(), new SimpleMeterRegistry());
+
+        assertThrows(ProviderBusyException.class, () -> client.identifyFoods(FAKE_IMAGE, "image/jpeg"));
+        assertFalse(hits.contains("never"),
+                "dialled a model with almost no budget left, which just burns a request");
+    }
+
     private AppProperties propsFor(int port, int readTimeoutMs, List<String> models) {
         AppProperties props = new AppProperties();
         props.setGeminiApiKeys(List.of("test-key"));

@@ -79,10 +79,22 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
      */
     private static final long SLOT_WAIT_MS = 1_000;
 
+    /**
+     * The shortest attempt worth making, as a fraction of a full-length call:
+     * below a quarter of the read timeout, a call is unlikely to finish and
+     * dialling anyway just spends a request against a provider that is already
+     * struggling.
+     *
+     * <p>Relative rather than a fixed number of seconds because the chains do
+     * not share a scale — vision allows 30s per call and menu 45s — and a
+     * constant that suits one silently misjudges the other.
+     */
+    private static final int MIN_ATTEMPT_FRACTION = 4;
+
     private final AppProperties props;
     private final ObjectMapper mapper;
-    private final RestClient restClient;
-    private final RestClient menuRestClient;
+    private final Endpoint standard;
+    private final Endpoint menuEndpoint;
     private final GeminiKeyPool keyPool;
     private final Semaphore providerSlots;
     private final MeterRegistry meters;
@@ -399,12 +411,54 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
         Gauge.builder(AppMetrics.GEMINI_SLOTS_AVAILABLE, providerSlots, Semaphore::availablePermits)
                 .description("Free Gemini bulkhead slots; zero means the next caller waits then sheds")
                 .register(meters);
-        this.restClient = clientWithReadTimeout(props, props.getReadTimeoutMs());
+        this.standard = endpoint(props, props.getReadTimeoutMs());
         // Menus get their own client purely for the longer read timeout: a
         // bigger image in and a JSON array of dozens of dishes out regularly
         // outruns the plate-photo budget, and at the shared 30s those calls
         // were cut off mid-generation and reported as an overloaded provider.
-        this.menuRestClient = clientWithReadTimeout(props, props.getMenuReadTimeoutMs());
+        this.menuEndpoint = endpoint(props, props.getMenuReadTimeoutMs());
+        logChainCapacity("vision", props.getGeminiVisionModels().size(),
+                props.getGeminiBudgetMs(), props.getReadTimeoutMs());
+        logChainCapacity("menu", props.getGeminiMenuModels().size(),
+                props.getGeminiMenuBudgetMs(), props.getMenuReadTimeoutMs());
+        // Feedback (and the workout coach, which shares its budget) runs on the
+        // standard endpoint with a deliberately shorter budget than vision,
+        // because FeedbackService has rule-based text to fall back on. Reported
+        // for the same reason as the others: so the gap between the models
+        // listed and the models reachable is visible rather than folklore.
+        logChainCapacity("feedback", props.getGeminiFeedbackModels().size(),
+                props.getGeminiFeedbackBudgetMs(), props.getReadTimeoutMs());
+    }
+
+    /**
+     * A client paired with the read timeout it was built with. They travel
+     * together because the retry chain has to know the timeout to work out
+     * whether another attempt still fits in what is left of the budget.
+     */
+    private record Endpoint(RestClient client, int readTimeoutMs) {}
+
+    private static Endpoint endpoint(AppProperties props, int readTimeoutMs) {
+        return new Endpoint(clientWithReadTimeout(props, readTimeoutMs), readTimeoutMs);
+    }
+
+    /**
+     * Says at startup how many models the budget can actually reach when every
+     * attempt runs to its read timeout.
+     *
+     * <p>Worth logging because the fallback list and the budget are configured
+     * in different places and neither mentions the other, so a chain can list
+     * three models while the budget affords two -- which is exactly the state
+     * that made a healthy provider report itself as busy. A chain that fails
+     * fast (503, 404, a retired model) still reaches every entry; this number
+     * is the floor, not the expectation.
+     */
+    private static void logChainCapacity(String chain, int models, int budgetMs, int readTimeoutMs) {
+        int affordable = Math.max(1, budgetMs / Math.max(1, readTimeoutMs));
+        if (affordable < models) {
+            log.info("Gemini {} chain lists {} model(s); a {}ms budget at a {}ms read timeout reaches {} "
+                            + "of them when calls hang. Fast failures still reach them all.",
+                    chain, models, budgetMs, readTimeoutMs, affordable);
+        }
     }
 
     private static RestClient clientWithReadTimeout(AppProperties props, int readTimeoutMs) {
@@ -434,7 +488,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
                 // before the answer starts.
                 "generationConfig", generationConfig(8192, FOOD_ITEM_SCHEMA));
 
-        String text = callWithRetry(props.getGeminiVisionModels(), body, props.getGeminiBudgetMs(), "vision", restClient);
+        String text = callWithRetry(props.getGeminiVisionModels(), body, props.getGeminiBudgetMs(), "vision", standard);
         String json = extractJson(text, '[', ']');
         try {
             return mapper.readerForListOf(IdentifiedFood.class).readValue(json);
@@ -460,7 +514,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
                 // budget outright, so a full menu could truncate every time.
                 "generationConfig", generationConfig(16384, FOOD_ITEM_SCHEMA));
 
-        String text = callWithRetry(props.getGeminiMenuModels(), body, props.getGeminiMenuBudgetMs(), "menu", menuRestClient);
+        String text = callWithRetry(props.getGeminiMenuModels(), body, props.getGeminiMenuBudgetMs(), "menu", menuEndpoint);
         String json = extractJson(text, '[', ']');
         try {
             return mapper.readerForListOf(IdentifiedFood.class).readValue(json);
@@ -496,7 +550,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
                 // calls, on a much smaller answer.
                 "generationConfig", generationConfig(2048, FEEDBACK_SCHEMA));
 
-        String text = callWithRetry(props.getGeminiFeedbackModels(), body, props.getGeminiFeedbackBudgetMs(), "feedback", restClient);
+        String text = callWithRetry(props.getGeminiFeedbackModels(), body, props.getGeminiFeedbackBudgetMs(), "feedback", standard);
         String json = extractJson(text, '{', '}');
         try {
             return mapper.readValue(json, FeedbackResult.class);
@@ -559,7 +613,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
                 "generationConfig", generationConfig(1024, schema));
 
         String text = callWithRetry(props.getGeminiFeedbackModels(), body,
-                props.getGeminiFeedbackBudgetMs(), "workout-coach", restClient);
+                props.getGeminiFeedbackBudgetMs(), "workout-coach", standard);
         return read.apply(extractJson(text, '{', '}'));
     }
 
@@ -596,7 +650,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
      * ceiling is what keeps a provider outage from becoming an app outage.
      */
     private String callWithRetry(List<String> models, Map<String, Object> body, int budgetMs,
-                                 String callType, RestClient client) {
+                                 String callType, Endpoint endpoint) {
         if (keyPool.isEmpty()) {
             throw new IllegalStateException("No Gemini API key configured");
         }
@@ -614,7 +668,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
             throw new ProviderBusyException("No free Gemini slot within " + SLOT_WAIT_MS + "ms");
         }
         try {
-            String text = callWithinBudget(models, body, budgetMs, callType, client);
+            String text = callWithinBudget(models, body, budgetMs, callType, endpoint);
             recordChain(chain, callType, AppMetrics.OUTCOME_SUCCESS);
             return text;
         } catch (BudgetExhaustedException e) {
@@ -682,7 +736,7 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
     }
 
     private String callWithinBudget(List<String> models, Map<String, Object> body, int budgetMs,
-                                    String callType, RestClient client) {
+                                    String callType, Endpoint endpoint) {
         Instant deadline = Instant.now().plusMillis(budgetMs);
         boolean firstAttempt = true;
         // A model that timed out or returned 5xx is written off for the rest of
@@ -704,13 +758,14 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
                     if (keyPool.isCoolingDown(key, model)) {
                         continue;
                     }
-                    if (!canStartAttempt(deadline, firstAttempt)) {
+                    RestClient attemptClient = clientForAttempt(endpoint, deadline, firstAttempt);
+                    if (attemptClient == null) {
                         throw budgetExhausted(models, budgetMs);
                     }
                     firstAttempt = false;
                     Timer.Sample call = Timer.start(meters);
                     try {
-                        String text = callAndExtractText(model, body, key, client);
+                        String text = callAndExtractText(model, body, key, attemptClient);
                         recordCall(call, model, callType, AppMetrics.OUTCOME_SUCCESS);
                         return text;
                     } catch (HttpStatusCodeException e) {
@@ -806,18 +861,45 @@ public class GeminiClient implements VisionAnalysisClient, FeedbackClient, Worko
     }
 
     /**
-     * Whether there is room to start another call inside the budget. Tests that
-     * the attempt can <em>finish</em> in time (now + read timeout), not merely
-     * that the deadline hasn't passed yet — the latter still lets a hung call
-     * that starts one millisecond early overshoot by a full read timeout, which
-     * is exactly the overrun this budget exists to bound.
+     * The client to make the next attempt with, or {@code null} when too little
+     * of the budget remains for an attempt to be worth making.
+     *
+     * <p>This replaces a guard that refused any attempt which could not fit a
+     * <em>full</em> read timeout. That arithmetic quietly cost the fallback
+     * chain most of its value: with a 60s budget and a 30s read timeout it left
+     * room for two attempts on paper, and once the first call burned its whole
+     * timeout the check landed a few milliseconds the wrong side of the
+     * deadline, so a three-model chain reliably tried <em>one</em> model and
+     * then reported the provider as busy. A healthy second model was never
+     * dialled.
+     *
+     * <p>Shortening the attempt is strictly better than refusing it. The
+     * overrun the budget exists to bound is still bounded — the attempt gets
+     * exactly the time that is left, never more — but the chain now spends its
+     * whole budget instead of abandoning the tail of it. A chain whose earlier
+     * models fail <em>fast</em> (503, 404, a retired model) leaves nearly the
+     * whole budget intact and still reaches every entry at full length.
      *
      * <p>The first attempt always goes ahead: a budget misconfigured below one
      * read timeout should still give the provider a real chance rather than
      * failing every analysis without a single call.
      */
-    private boolean canStartAttempt(Instant deadline, boolean firstAttempt) {
-        return firstAttempt || !Instant.now().plusMillis(props.getReadTimeoutMs()).isAfter(deadline);
+    private RestClient clientForAttempt(Endpoint endpoint, Instant deadline, boolean firstAttempt) {
+        if (firstAttempt) {
+            return endpoint.client();
+        }
+        long remainingMs = Duration.between(Instant.now(), deadline).toMillis();
+        if (remainingMs < endpoint.readTimeoutMs() / MIN_ATTEMPT_FRACTION) {
+            return null;
+        }
+        if (remainingMs >= endpoint.readTimeoutMs()) {
+            return endpoint.client();
+        }
+        // Enough left to be worth trying, but not a full-length call. Build a
+        // client for exactly what remains rather than throwing the remainder
+        // away. Rare, and SimpleClientHttpRequestFactory holds no pool, so
+        // there is nothing here worth caching.
+        return clientWithReadTimeout(props, (int) remainingMs);
     }
 
     private BudgetExhaustedException budgetExhausted(List<String> models, int budgetMs) {
