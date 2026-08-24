@@ -12,6 +12,7 @@ import com.duabiskuttelur.model.WorkoutSetRequest;
 import com.duabiskuttelur.model.WorkoutReplaceRequest;
 import com.duabiskuttelur.model.WorkoutTodayResponse;
 import com.duabiskuttelur.service.UserService;
+import com.duabiskuttelur.service.WorkoutInsights;
 import com.duabiskuttelur.service.WorkoutService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -45,10 +46,13 @@ import java.util.List;
 public class WorkoutController {
 
     private final WorkoutService workoutService;
+    private final WorkoutInsights insights;
     private final UserService userService;
 
-    public WorkoutController(WorkoutService workoutService, UserService userService) {
+    public WorkoutController(WorkoutService workoutService, WorkoutInsights insights,
+                             UserService userService) {
         this.workoutService = workoutService;
+        this.insights = insights;
         this.userService = userService;
     }
 
@@ -77,13 +81,13 @@ public class WorkoutController {
      */
     @GetMapping("/history")
     public WorkoutHistoryResponse history() {
-        return workoutService.history(currentUserId());
+        return insights.history(currentUserId());
     }
 
     /** Workout figures for the Analysis tab. Also read-only, for the same reason. */
     @GetMapping("/stats")
     public WorkoutStatsResponse stats() {
-        return workoutService.stats(currentUserId());
+        return insights.stats(currentUserId());
     }
 
     /**
@@ -95,7 +99,7 @@ public class WorkoutController {
      */
     @GetMapping("/glance")
     public WorkoutGlanceResponse glance() {
-        return workoutService.glance(currentUserId());
+        return insights.glance(currentUserId());
     }
 
     @GetMapping("/profile")

@@ -5,11 +5,8 @@ import com.duabiskuttelur.model.WorkoutAlternative;
 import com.duabiskuttelur.model.WorkoutCoachNote;
 import com.duabiskuttelur.model.WorkoutCompleteRequest;
 import com.duabiskuttelur.model.WorkoutCompletionResponse;
-import com.duabiskuttelur.model.WorkoutGlanceResponse;
-import com.duabiskuttelur.model.WorkoutHistoryResponse;
 import com.duabiskuttelur.model.WorkoutProfileRequest;
 import com.duabiskuttelur.model.WorkoutSessionView;
-import com.duabiskuttelur.model.WorkoutStatsResponse;
 import com.duabiskuttelur.model.WorkoutTodayResponse;
 import com.duabiskuttelur.persistence.WorkoutProfileEntity;
 import com.duabiskuttelur.persistence.WorkoutProfileRepository;
@@ -48,7 +45,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -80,20 +76,6 @@ public class WorkoutService {
 
     /** Sessions read back for the streak, the week strip and the coach's context. */
     private static final int RECENT_WINDOW_DAYS = 35;
-
-    /**
-     * The window the History and Analysis tabs read.
-     *
-     * <p>Wider than the dashboard's, because those two screens answer questions
-     * about the past rather than about today: a 35-day window would silently cap
-     * "best streak" and the strength progressions at five weeks, and a personal
-     * best that quietly expires is worse than none.
-     *
-     * <p>Bounded rather than unbounded on purpose — this is a per-user list read
-     * on a tab switch, and "everything ever" is a query whose cost grows with
-     * how loyal the user is.
-     */
-    private static final int HISTORY_WINDOW_DAYS = 120;
 
     /** How many past ratings the planner is allowed to react to. */
     private static final int RECENT_FEELS = 3;
@@ -205,7 +187,7 @@ public class WorkoutService {
          * somebody is three sets into, because they edited a preference, would
          * be a worse bug than a stale plan.
          */
-        sessions.findByUserIdAndSessionDate(userId, today())
+        sessions.findByUserIdAndSessionDate(userId, WorkoutCalendar.today())
                 .filter(s -> Status.PLANNED.tag().equals(s.getStatus()))
                 .ifPresent(this::deleteSession);
 
@@ -224,7 +206,7 @@ public class WorkoutService {
             return new WorkoutTodayResponse(false, null, null, null, List.of(), stats(userId, List.of()));
         }
         WorkoutProfile profile = maybeProfile.get();
-        LocalDate today = today();
+        LocalDate today = WorkoutCalendar.today();
         List<WorkoutSessionEntity> recent = recentSessions(userId, today);
         WorkoutSessionEntity session = sessions.findByUserIdAndSessionDate(userId, today)
                 .orElseGet(() -> generate(userId, today, profile, recent, lang));
@@ -251,7 +233,7 @@ public class WorkoutService {
         List<Feel> feels = recentFeels(recent);
         PlannedSession planned = planner.plan(userId, date, profile, feels);
         WorkoutCoach.SessionFacts facts = new WorkoutCoach.SessionFacts(
-                planned, profile, completedInLastWeek(recent, date), streak(recent, date),
+                planned, profile, completedInLastWeek(recent, date), WorkoutCalendar.streak(recent, date),
                 feels, WorkoutPlanner.volumeAdjustment(feels));
         WorkoutCoach.CoachedNote note = coach.noteFor(facts, lang);
 
@@ -480,227 +462,6 @@ public class WorkoutService {
                 reply.source().tag());
     }
 
-    // ------------------------------------------------- history and analysis
-
-    /**
-     * One line about today, for the Today card on the Snap tab.
-     *
-     * <p>Reads the stored session and stops. It must never plan one: this is the
-     * app's home screen, so generating here would fire a Gemini call for the
-     * coach note on every user's first open of the day — for a sentence that
-     * lives two taps away and that most of them will never see.
-     */
-    public WorkoutGlanceResponse glance(long userId) {
-        Optional<WorkoutProfile> maybeProfile = profile(userId);
-        if (maybeProfile.isEmpty()) {
-            return new WorkoutGlanceResponse(false, false, null);
-        }
-        LocalDate today = today();
-        boolean trainingDay = isTrainingDay(today, maybeProfile.get());
-
-        return sessions.findByUserIdAndSessionDate(userId, today)
-                .map(s -> {
-                    List<WorkoutSessionExerciseEntity> rows =
-                            exercises.findBySessionIdOrderByPositionAsc(s.getId());
-                    return new WorkoutGlanceResponse(true, trainingDay,
-                            new WorkoutGlanceResponse.Session(
-                                    s.getId(), s.getTitle(), effectiveMinutes(s), s.getStatus(),
-                                    setLogs.findBySessionId(s.getId()).size(),
-                                    rows.stream().mapToInt(WorkoutSessionExerciseEntity::getSets).sum()));
-                })
-                .orElseGet(() -> new WorkoutGlanceResponse(true, trainingDay, null));
-    }
-
-    /**
-     * The Workouts tab inside the History screen.
-     *
-     * <p>Read-only, and separate from {@link #today} on purpose: that method
-     * plans a session when there isn't one, and looking at last week's training
-     * must not create this morning's workout as a side effect.
-     */
-    public WorkoutHistoryResponse history(long userId) {
-        LocalDate today = today();
-        List<WorkoutSessionEntity> recent = sessionsSince(userId, today, HISTORY_WINDOW_DAYS);
-        Map<Long, Integer> logged = setCountsFor(recent);
-        Map<Long, Integer> plannedBySession = plannedSetCountsFor(recent);
-
-        List<WorkoutHistoryResponse.Entry> entries = recent.stream()
-                .sorted(Comparator.comparing(WorkoutSessionEntity::getSessionDate).reversed())
-                .map(s -> new WorkoutHistoryResponse.Entry(
-                        s.getId(), s.getSessionDate().toString(), s.getTitle(), s.getFocus(),
-                        s.getLevel(), effectiveMinutes(s), s.getStatus(),
-                        logged.getOrDefault(s.getId(), 0),
-                        plannedBySession.getOrDefault(s.getId(), 0)))
-                .toList();
-
-        LocalDate monday = today.minusDays(today.getDayOfWeek().getValue() - 1L);
-        Map<LocalDate, Integer> minutesByDate = recent.stream()
-                .filter(s -> Status.COMPLETED.tag().equals(s.getStatus()))
-                .collect(Collectors.toMap(WorkoutSessionEntity::getSessionDate,
-                        WorkoutService::effectiveMinutes, Integer::sum));
-
-        List<WorkoutHistoryResponse.DayMinutes> week = new ArrayList<>();
-        int weekMinutes = 0;
-        for (int i = 0; i < 7; i++) {
-            LocalDate day = monday.plusDays(i);
-            int minutes = minutesByDate.getOrDefault(day, 0);
-            weekMinutes += minutes;
-            week.add(new WorkoutHistoryResponse.DayMinutes(day.toString(),
-                    day.getDayOfWeek().getDisplayName(TextStyle.NARROW, Locale.ENGLISH), minutes));
-        }
-        return new WorkoutHistoryResponse(entries, week, weekMinutes);
-    }
-
-    /** What a session actually took, falling back to what it was planned to take. */
-    private static int effectiveMinutes(WorkoutSessionEntity s) {
-        return s.getActualMinutes() != null && s.getActualMinutes() > 0
-                ? s.getActualMinutes()
-                : s.getMinutes();
-    }
-
-    private Map<Long, Integer> setCountsFor(List<WorkoutSessionEntity> sessions) {
-        if (sessions.isEmpty()) {
-            return Map.of();
-        }
-        Map<Long, Integer> counts = new java.util.HashMap<>();
-        for (WorkoutSessionEntity s : sessions) {
-            counts.put(s.getId(), setLogs.findBySessionId(s.getId()).size());
-        }
-        return counts;
-    }
-
-    private Map<Long, Integer> plannedSetCountsFor(List<WorkoutSessionEntity> sessions) {
-        if (sessions.isEmpty()) {
-            return Map.of();
-        }
-        Map<Long, Integer> counts = new java.util.HashMap<>();
-        for (WorkoutSessionEntity s : sessions) {
-            counts.put(s.getId(), exercises.findBySessionIdOrderByPositionAsc(s.getId()).stream()
-                    .mapToInt(WorkoutSessionExerciseEntity::getSets).sum());
-        }
-        return counts;
-    }
-
-    /** Workout figures for the Analysis tab. */
-    public WorkoutStatsResponse stats(long userId) {
-        Optional<WorkoutProfile> maybeProfile = profile(userId);
-        LocalDate today = today();
-        List<WorkoutSessionEntity> recent = sessionsSince(userId, today, HISTORY_WINDOW_DAYS);
-        List<WorkoutSessionEntity> completed = recent.stream()
-                .filter(s -> Status.COMPLETED.tag().equals(s.getStatus()))
-                .toList();
-        List<WorkoutSessionEntity> thisMonth = completed.stream()
-                .filter(s -> s.getSessionDate().getMonth() == today.getMonth()
-                        && s.getSessionDate().getYear() == today.getYear())
-                .toList();
-
-        int expected = maybeProfile.map(p -> expectedSessionsThisMonth(p, today)).orElse(0);
-        int consistency = expected == 0 ? 0
-                : (int) Math.round(100.0 * Math.min(thisMonth.size(), expected) / expected);
-
-        return new WorkoutStatsResponse(
-                maybeProfile.isPresent(),
-                thisMonth.size(),
-                thisMonth.stream().mapToInt(WorkoutService::effectiveMinutes).sum(),
-                consistency,
-                expected,
-                streak(recent, today),
-                bestStreak(completed),
-                progressions(completed));
-    }
-
-    /**
-     * How many sessions the plan called for so far this month.
-     *
-     * <p>Counted from the rotation rather than from stored rows, which is the
-     * only honest version: a session row exists only for a day the user actually
-     * opened the tab, so "completed / sessions in the database" would score
-     * somebody who never opened the app at 100%. This asks what they said they
-     * would do and compares it to what they did.
-     *
-     * <p>Only days up to today count — being at 50% on the 15th is not the same
-     * failure as being at 50% on the 31st, and the tile would read as the latter.
-     */
-    static int expectedSessionsThisMonth(WorkoutProfile profile, LocalDate today) {
-        LocalDate first = today.withDayOfMonth(1);
-        int count = 0;
-        for (LocalDate day = first; !day.isAfter(today); day = day.plusDays(1)) {
-            if (isTrainingDay(day, profile)) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    /** The longest run of consecutive completed days on record. */
-    static int bestStreak(List<WorkoutSessionEntity> completed) {
-        Set<LocalDate> done = completed.stream()
-                .map(WorkoutSessionEntity::getSessionDate)
-                .collect(Collectors.toCollection(java.util.TreeSet::new));
-        int best = 0;
-        int run = 0;
-        LocalDate previous = null;
-        for (LocalDate day : done) {
-            run = previous != null && previous.plusDays(1).equals(day) ? run + 1 : 1;
-            previous = day;
-            best = Math.max(best, run);
-        }
-        return best;
-    }
-
-    /**
-     * Exercises whose prescribed dose has gone up.
-     *
-     * <p>Both ends are prescriptions from completed sessions, never a claim the
-     * user typed — the catalogue sets the starting dose and the planner raises
-     * it, so this is the app showing its own working rather than flattering
-     * anybody. Only increases are listed: a dose that dropped after a "too hard"
-     * rating is the system working correctly, and putting it under "getting
-     * stronger" would read as a rebuke.
-     */
-    private List<WorkoutStatsResponse.Progression> progressions(List<WorkoutSessionEntity> completed) {
-        if (completed.isEmpty()) {
-            return List.of();
-        }
-        Map<Long, LocalDate> dateBySession = completed.stream()
-                .collect(Collectors.toMap(WorkoutSessionEntity::getId, WorkoutSessionEntity::getSessionDate));
-        List<WorkoutSessionExerciseEntity> rows =
-                exercises.findBySessionIdIn(List.copyOf(dateBySession.keySet()));
-
-        record Dosed(LocalDate date, WorkoutSessionExerciseEntity row) {}
-        Map<String, List<Dosed>> byKey = rows.stream()
-                .map(r -> new Dosed(dateBySession.get(r.getSessionId()), r))
-                .filter(d -> d.date() != null)
-                .collect(Collectors.groupingBy(d -> d.row().getExerciseKey()));
-
-        List<WorkoutStatsResponse.Progression> out = new ArrayList<>();
-        byKey.forEach((key, list) -> {
-            if (list.size() < 2) {
-                return;
-            }
-            List<Dosed> sorted = list.stream().sorted(Comparator.comparing(Dosed::date)).toList();
-            WorkoutSessionExerciseEntity first = sorted.get(0).row();
-            WorkoutSessionExerciseEntity last = sorted.get(sorted.size() - 1).row();
-            if (volumeOf(last) <= volumeOf(first)) {
-                return;
-            }
-            out.add(new WorkoutStatsResponse.Progression(
-                    key, last.getName(), describeDose(first), describeDose(last)));
-        });
-        out.sort(Comparator.comparing(WorkoutStatsResponse.Progression::name));
-        return out;
-    }
-
-    private static int volumeOf(WorkoutSessionExerciseEntity row) {
-        return row.getSets() * row.getReps();
-    }
-
-    /** "3 × 12", or "3 × 30s" where the dose is a duration. */
-    private static String describeDose(WorkoutSessionExerciseEntity row) {
-        String suffix = "sec".equals(row.getUnit()) ? "s" : "";
-        return row.getSets() + " × " + row.getReps() + suffix;
-    }
-
     // ------------------------------------------------------------- reading
 
     private List<WorkoutSessionEntity> recentSessions(long userId, LocalDate today) {
@@ -737,34 +498,6 @@ public class WorkoutService {
                 .count();
     }
 
-    /**
-     * Consecutive days ending today (or yesterday) with a completed session.
-     *
-     * <p>Yesterday counts as the anchor so a streak does not appear broken all
-     * morning before you have trained. Rest days do not extend it — a streak
-     * that survives arbitrary gaps is not measuring anything.
-     */
-    static int streak(List<WorkoutSessionEntity> recent, LocalDate today) {
-        Set<LocalDate> done = recent.stream()
-                .filter(s -> Status.COMPLETED.tag().equals(s.getStatus()))
-                .map(WorkoutSessionEntity::getSessionDate)
-                .collect(Collectors.toCollection(HashSet::new));
-        LocalDate cursor = done.contains(today) ? today : today.minusDays(1);
-        int count = 0;
-        while (done.contains(cursor)) {
-            count++;
-            cursor = cursor.minusDays(1);
-        }
-        return count;
-    }
-
-    /**
-     * The seven columns of the week strip, Monday to Sunday of the current week.
-     *
-     * <p>"Rest" versus "planned" for a future day is decided here rather than in
-     * the client because it depends on the training rotation, which the client
-     * does not know and should not have to reimplement to draw a circle.
-     */
     private List<WorkoutTodayResponse.WeekDay> weekStrip(long userId, LocalDate today,
                                                          WorkoutProfile profile,
                                                          List<WorkoutSessionEntity> recent) {
@@ -787,7 +520,7 @@ public class WorkoutService {
                 // happen, whether it was planned, skipped or never generated.
                 state = "rest";
             } else {
-                state = isTrainingDay(day, profile) ? "planned" : "rest";
+                state = WorkoutCalendar.isTrainingDay(day, profile) ? "planned" : "rest";
             }
             out.add(new WorkoutTodayResponse.WeekDay(day.toString(),
                     day.getDayOfWeek().getDisplayName(TextStyle.NARROW, Locale.ENGLISH), state));
@@ -795,31 +528,15 @@ public class WorkoutService {
         return out;
     }
 
-    /**
-     * Whether a future day is a training day.
-     *
-     * <p>Spreads the week's sessions evenly rather than front-loading them:
-     * three days a week becomes Monday, Wednesday, Friday, not Monday, Tuesday,
-     * Wednesday and a four-day gap.
-     */
-    static boolean isTrainingDay(LocalDate day, WorkoutProfile profile) {
-        int days = Math.max(1, Math.min(7, profile.daysPerWeek()));
-        if (days >= 7) {
-            return true;
-        }
-        int index = day.getDayOfWeek().getValue() - 1;
-        return (index * days) / 7 != ((index - 1) * days) / 7 || index == 0;
-    }
-
     private WorkoutTodayResponse.Stats stats(long userId, List<WorkoutSessionEntity> recent) {
-        LocalDate today = today();
+        LocalDate today = WorkoutCalendar.today();
         int thisMonth = (int) recent.stream()
                 .filter(s -> Status.COMPLETED.tag().equals(s.getStatus()))
                 .filter(s -> s.getSessionDate().getMonth() == today.getMonth()
                         && s.getSessionDate().getYear() == today.getYear())
                 .count();
         return new WorkoutTodayResponse.Stats(
-                weightService.latestWeightKg(userId).orElse(null), thisMonth, streak(recent, today));
+                weightService.latestWeightKg(userId).orElse(null), thisMonth, WorkoutCalendar.streak(recent, today));
     }
 
     private WorkoutSessionView view(WorkoutSessionEntity session) {
@@ -914,23 +631,6 @@ public class WorkoutService {
     }
 
     // -------------------------------------------------------------- helpers
-
-    /**
-     * "Today" in the user's own calendar.
-     *
-     * <p>The system default zone, not UTC. The container runs with
-     * {@code TZ=Asia/Kuala_Lumpur}, and on UTC the day would roll over at 8am
-     * local — mid-morning of the day whose workout it is meant to end.
-     * {@code WeightService} reads the clock the same way, for the same reason.
-     *
-     * <p>No injected {@link java.time.Clock}: nothing in this class needs a
-     * fixed one, because every date-sensitive decision — the rotation, the
-     * streak, the volume adjustment — takes its date as a parameter and is
-     * tested directly.
-     */
-    private static LocalDate today() {
-        return LocalDate.now(java.time.ZoneId.systemDefault());
-    }
 
     private static Instant now() {
         return Instant.now();

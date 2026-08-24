@@ -45,7 +45,11 @@ class WorkoutHistoryStatsTest {
     private static final long USER = 5001L;
     private static final long OTHER_USER = 5002L;
 
-    @Autowired private WorkoutService service;
+    // The read side under test, and the write side used only to arrange a
+    // history for it to read. Two fields rather than one is the point of the
+    // split: nothing this file asserts on can plan or write anything.
+    @Autowired private WorkoutInsights insights;
+    @Autowired private WorkoutService workouts;
     @Autowired private WorkoutProfileRepository profiles;
     @Autowired private WorkoutSessionRepository sessions;
     @Autowired private WorkoutSessionExerciseRepository exercises;
@@ -87,11 +91,11 @@ class WorkoutHistoryStatsTest {
      */
     @Test
     void readingHistoryNeverPlansAWorkout() {
-        service.saveProfile(USER, onboarding());
+        workouts.saveProfile(USER, onboarding());
         assertEquals(0, sessions.findAll().size(), "onboarding alone must not plan anything");
 
-        service.history(USER);
-        service.stats(USER);
+        insights.history(USER);
+        insights.stats(USER);
 
         assertEquals(0, sessions.findAll().size(),
                 "reading history or stats created a session — opening a past-tense screen "
@@ -107,9 +111,9 @@ class WorkoutHistoryStatsTest {
      */
     @Test
     void theSnapRowNeverPlansAWorkoutEither() {
-        service.saveProfile(USER, onboarding());
+        workouts.saveProfile(USER, onboarding());
 
-        service.glance(USER);
+        insights.glance(USER);
 
         assertEquals(0, sessions.findAll().size(),
                 "the Snap tab's Today row planned a session — that is a model call "
@@ -118,7 +122,7 @@ class WorkoutHistoryStatsTest {
 
     @Test
     void theSnapRowSaysNothingBeforeOnboarding() {
-        var glance = service.glance(USER);
+        var glance = insights.glance(USER);
 
         assertFalse(glance.hasProfile());
         assertEquals(null, glance.session());
@@ -132,12 +136,12 @@ class WorkoutHistoryStatsTest {
      */
     @Test
     void theSnapRowDistinguishesAnUnopenedTrainingDayFromARestDay() {
-        service.saveProfile(USER, new WorkoutProfileRequest(
+        workouts.saveProfile(USER, new WorkoutProfileRequest(
                 "maintain", "beginner", 7, 30, List.of("none"), List.of()));
 
-        assertTrue(service.glance(USER).trainingDay(),
+        assertTrue(insights.glance(USER).trainingDay(),
                 "training every day should be a training day whatever today is");
-        assertEquals(null, service.glance(USER).session(), "nothing has been planned yet");
+        assertEquals(null, insights.glance(USER).session(), "nothing has been planned yet");
     }
 
     /**
@@ -157,25 +161,25 @@ class WorkoutHistoryStatsTest {
 
         int trainingDays = 0;
         for (int i = 0; i < 7; i++) {
-            if (WorkoutService.isTrainingDay(monday.plusDays(i), threeDays)) {
+            if (WorkoutCalendar.isTrainingDay(monday.plusDays(i), threeDays)) {
                 trainingDays++;
             }
-            assertTrue(WorkoutService.isTrainingDay(monday.plusDays(i), everyDay),
+            assertTrue(WorkoutCalendar.isTrainingDay(monday.plusDays(i), everyDay),
                     "a 7-day plan called " + monday.plusDays(i).getDayOfWeek() + " a rest day");
         }
 
         assertEquals(3, trainingDays, "a 3-day plan should mark exactly three days of the week");
-        assertTrue(WorkoutService.isTrainingDay(monday, threeDays),
+        assertTrue(WorkoutCalendar.isTrainingDay(monday, threeDays),
                 "the week should start with a training day rather than a rest day");
     }
 
     @Test
     void theSnapRowReportsAnExistingSessionAndItsProgress() {
-        service.saveProfile(USER, onboarding());
-        WorkoutSessionView session = service.today(USER, "en").session();
-        service.logSet(USER, session.id(), 0, 0, true);
+        workouts.saveProfile(USER, onboarding());
+        WorkoutSessionView session = workouts.today(USER, "en").session();
+        workouts.logSet(USER, session.id(), 0, 0, true);
 
-        var glance = service.glance(USER);
+        var glance = insights.glance(USER);
 
         assertTrue(glance.hasProfile());
         assertEquals(session.id(), glance.session().id());
@@ -191,17 +195,17 @@ class WorkoutHistoryStatsTest {
 
     @Test
     void theSnapRowNeverLeaksAnotherUsersSession() {
-        service.saveProfile(OTHER_USER, onboarding());
-        service.today(OTHER_USER, "en");
-        service.saveProfile(USER, onboarding());
+        workouts.saveProfile(OTHER_USER, onboarding());
+        workouts.today(OTHER_USER, "en");
+        workouts.saveProfile(USER, onboarding());
 
-        assertEquals(null, service.glance(USER).session(),
+        assertEquals(null, insights.glance(USER).session(),
                 "one user's Today row showed another user's session");
     }
 
     @Test
     void historyIsEmptyButWellFormedForSomeoneWhoHasNeverTrained() {
-        WorkoutHistoryResponse response = service.history(USER);
+        WorkoutHistoryResponse response = insights.history(USER);
 
         assertTrue(response.entries().isEmpty());
         assertEquals(7, response.week().size(), "the bar chart is always seven columns");
@@ -215,7 +219,7 @@ class WorkoutHistoryStatsTest {
         completedOn(USER, today.minusDays(1), 31);
         completedOn(USER, today.minusDays(9), 28);
 
-        List<String> dates = service.history(USER).entries().stream()
+        List<String> dates = insights.history(USER).entries().stream()
                 .map(WorkoutHistoryResponse.Entry::date).toList();
 
         assertEquals(List.of(today.minusDays(1).toString(), today.minusDays(4).toString(),
@@ -225,11 +229,11 @@ class WorkoutHistoryStatsTest {
     /** A skipped day belongs in an honest record; hiding it would flatter the list. */
     @Test
     void historyKeepsSkippedSessionsRatherThanHidingThem() {
-        service.saveProfile(USER, onboarding());
-        long id = service.today(USER, "en").session().id();
-        service.setSkipped(USER, id, true);
+        workouts.saveProfile(USER, onboarding());
+        long id = workouts.today(USER, "en").session().id();
+        workouts.setSkipped(USER, id, true);
 
-        List<WorkoutHistoryResponse.Entry> entries = service.history(USER).entries();
+        List<WorkoutHistoryResponse.Entry> entries = insights.history(USER).entries();
 
         assertEquals(1, entries.size());
         assertEquals("skipped", entries.get(0).status());
@@ -241,12 +245,12 @@ class WorkoutHistoryStatsTest {
      */
     @Test
     void historyShowsHowMuchOfEachSessionWasActuallyDone() {
-        service.saveProfile(USER, onboarding());
-        WorkoutSessionView session = service.today(USER, "en").session();
-        service.logSet(USER, session.id(), 0, 0, true);
-        service.logSet(USER, session.id(), 0, 1, true);
+        workouts.saveProfile(USER, onboarding());
+        WorkoutSessionView session = workouts.today(USER, "en").session();
+        workouts.logSet(USER, session.id(), 0, 0, true);
+        workouts.logSet(USER, session.id(), 0, 1, true);
 
-        WorkoutHistoryResponse.Entry entry = service.history(USER).entries().get(0);
+        WorkoutHistoryResponse.Entry entry = insights.history(USER).entries().get(0);
 
         assertEquals(2, entry.completedSets());
         assertEquals(session.totalSets(), entry.totalSets());
@@ -260,10 +264,10 @@ class WorkoutHistoryStatsTest {
         LocalDate monday = today.minusDays(today.getDayOfWeek().getValue() - 1L);
         completedOn(USER, monday, 22);
         // A planned-but-not-done day contributes nothing.
-        service.saveProfile(USER, onboarding());
-        service.today(USER, "en");
+        workouts.saveProfile(USER, onboarding());
+        workouts.today(USER, "en");
 
-        WorkoutHistoryResponse response = service.history(USER);
+        WorkoutHistoryResponse response = insights.history(USER);
         int mondayMinutes = response.week().stream()
                 .filter(d -> d.date().equals(monday.toString()))
                 .mapToInt(WorkoutHistoryResponse.DayMinutes::minutes).sum();
@@ -286,16 +290,16 @@ class WorkoutHistoryStatsTest {
         completedOn(USER, thisWeek, 30);
         completedOn(OTHER_USER, thisWeek, 45);
 
-        assertEquals(1, service.history(USER).entries().size());
-        assertEquals(30, service.history(USER).weekMinutes());
-        assertEquals(45, service.history(OTHER_USER).weekMinutes());
+        assertEquals(1, insights.history(USER).entries().size());
+        assertEquals(30, insights.history(USER).weekMinutes());
+        assertEquals(45, insights.history(OTHER_USER).weekMinutes());
     }
 
     // --------------------------------------------------------------- stats
 
     @Test
     void statsSayNothingUsefulButAreWellFormedBeforeOnboarding() {
-        WorkoutStatsResponse stats = service.stats(USER);
+        WorkoutStatsResponse stats = insights.stats(USER);
 
         assertFalse(stats.hasProfile());
         assertEquals(0, stats.workoutsThisMonth());
@@ -307,11 +311,11 @@ class WorkoutHistoryStatsTest {
     @Test
     void statsCountOnlyThisMonthsCompletedWork() {
         LocalDate today = LocalDate.now();
-        service.saveProfile(USER, onboarding());
+        workouts.saveProfile(USER, onboarding());
         completedOn(USER, today, 30);
         completedOn(USER, today.minusMonths(1).withDayOfMonth(15), 45);
 
-        WorkoutStatsResponse stats = service.stats(USER);
+        WorkoutStatsResponse stats = insights.stats(USER);
 
         assertEquals(1, stats.workoutsThisMonth(), "last month's session was counted as this month's");
         assertEquals(30, stats.minutesThisMonth());
@@ -329,7 +333,7 @@ class WorkoutHistoryStatsTest {
         WorkoutProfile threeDays = new WorkoutProfile(
                 Goal.MAINTAIN, Level.BEGINNER, 3, 30, Set.of(Equipment.NONE), Set.of());
 
-        int expected = WorkoutService.expectedSessionsThisMonth(threeDays, today);
+        int expected = WorkoutCalendar.expectedSessionsThisMonth(threeDays, today);
 
         // Seventeen days at three a week is around seven or eight sessions —
         // never zero, which is what makes 0% mean something.
@@ -343,21 +347,21 @@ class WorkoutHistoryStatsTest {
         WorkoutProfile everyDay = new WorkoutProfile(
                 Goal.MAINTAIN, Level.BEGINNER, 7, 30, Set.of(Equipment.NONE), Set.of());
 
-        assertEquals(3, WorkoutService.expectedSessionsThisMonth(everyDay, LocalDate.of(2026, 8, 3)));
-        assertEquals(31, WorkoutService.expectedSessionsThisMonth(everyDay, LocalDate.of(2026, 8, 31)));
+        assertEquals(3, WorkoutCalendar.expectedSessionsThisMonth(everyDay, LocalDate.of(2026, 8, 3)));
+        assertEquals(31, WorkoutCalendar.expectedSessionsThisMonth(everyDay, LocalDate.of(2026, 8, 31)));
     }
 
     @Test
     void consistencyNeverExceedsOneHundredPercent() {
         LocalDate today = LocalDate.now();
-        service.saveProfile(USER, new WorkoutProfileRequest(
+        workouts.saveProfile(USER, new WorkoutProfileRequest(
                 "maintain", "beginner", 1, 30, List.of("none"), List.of()));
         // Train far more than a once-a-week plan asked for.
         for (int i = 0; i < 20 && today.minusDays(i).getMonth() == today.getMonth(); i++) {
             completedOn(USER, today.minusDays(i), 30);
         }
 
-        assertTrue(service.stats(USER).consistencyPercent() <= 100,
+        assertTrue(insights.stats(USER).consistencyPercent() <= 100,
                 "over-delivering produced a figure above 100%");
     }
 
@@ -369,13 +373,60 @@ class WorkoutHistoryStatsTest {
                 stub(today.minusDays(17)),
                 stub(today.minusDays(1)), stub(today));
 
-        assertEquals(4, WorkoutService.bestStreak(completed));
-        assertEquals(2, WorkoutService.streak(completed, today));
+        assertEquals(4, WorkoutCalendar.bestStreak(completed));
+        assertEquals(2, WorkoutCalendar.streak(completed, today));
     }
 
     @Test
     void bestStreakIsZeroWithNothingCompleted() {
-        assertEquals(0, WorkoutService.bestStreak(List.of()));
+        assertEquals(0, WorkoutCalendar.bestStreak(List.of()));
+    }
+
+    /**
+     * A skipped day is not a completed one, whichever list it arrives in.
+     *
+     * <p>bestStreak used to trust its caller to have filtered already, while
+     * its sibling streak() filtered for itself. Moving the pair into
+     * WorkoutCalendar put that inconsistency side by side, and it is the only
+     * behaviour this refactor changed: an unfiltered list now gets the right
+     * answer instead of a silently inflated one.
+     */
+    @Test
+    void bestStreakIgnoresSessionsThatWereNotCompleted() {
+        LocalDate today = LocalDate.of(2026, 8, 17);
+        List<WorkoutSessionEntity> mixed = List.of(
+                stub(today.minusDays(3)), skipped(today.minusDays(2)), stub(today.minusDays(1)));
+
+        assertEquals(1, WorkoutCalendar.bestStreak(mixed), "a skipped day bridged two runs into one");
+    }
+
+    /**
+     * The read side is read-only by construction now, not by convention.
+     *
+     * <p>glance() must not plan a session: it backs the app's home screen, and
+     * generating there would fire a Gemini call on every user's first open of
+     * the day. history() must not either, or looking at last week's training
+     * would create this morning's workout. Both used to be comments on a class
+     * that held the planner and the coach one field access away. This is the
+     * version that fails when somebody injects one back.
+     */
+    @Test
+    void theReadSideHoldsNothingThatCouldWrite() {
+        Set<String> held = java.util.Arrays.stream(WorkoutInsights.class.getDeclaredFields())
+                .filter(f -> !java.lang.reflect.Modifier.isStatic(f.getModifiers()))
+                .map(f -> f.getType().getSimpleName())
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertEquals(Set.of("WorkoutProfileRepository", "WorkoutSessionRepository",
+                        "WorkoutSessionExerciseRepository", "WorkoutSetLogRepository"), held,
+                "the read side picked up a collaborator that can plan, coach or record");
+    }
+
+    private static WorkoutSessionEntity skipped(LocalDate date) {
+        WorkoutSessionEntity e = new WorkoutSessionEntity();
+        e.setSessionDate(date);
+        e.setStatus("skipped");
+        return e;
     }
 
     private static WorkoutSessionEntity stub(LocalDate date) {
@@ -390,11 +441,11 @@ class WorkoutHistoryStatsTest {
     /** One session is a starting point, not progress. */
     @Test
     void aSingleSessionShowsNoProgression() {
-        service.saveProfile(USER, onboarding());
-        long id = service.today(USER, "en").session().id();
-        service.complete(USER, id, new WorkoutCompleteRequest("just_right", null, 30, "en"));
+        workouts.saveProfile(USER, onboarding());
+        long id = workouts.today(USER, "en").session().id();
+        workouts.complete(USER, id, new WorkoutCompleteRequest("just_right", null, 30, "en"));
 
-        assertTrue(service.stats(USER).progressions().isEmpty());
+        assertTrue(insights.stats(USER).progressions().isEmpty());
     }
 
     /**
@@ -409,7 +460,7 @@ class WorkoutHistoryStatsTest {
         prescribe(older.getId(), "plank", "Plank", 2, 25, "sec");
         prescribe(newer.getId(), "plank", "Plank", 3, 30, "sec");
 
-        List<WorkoutStatsResponse.Progression> progressions = service.stats(USER).progressions();
+        List<WorkoutStatsResponse.Progression> progressions = insights.stats(USER).progressions();
 
         assertEquals(1, progressions.size());
         WorkoutStatsResponse.Progression plank = progressions.get(0);
@@ -430,7 +481,7 @@ class WorkoutHistoryStatsTest {
         prescribe(older.getId(), "push_up", "Push Up", 3, 10, "reps");
         prescribe(newer.getId(), "push_up", "Push Up", 2, 10, "reps");
 
-        assertTrue(service.stats(USER).progressions().isEmpty());
+        assertTrue(insights.stats(USER).progressions().isEmpty());
     }
 
     /** An unfinished session is not evidence of anything. */
@@ -444,7 +495,7 @@ class WorkoutHistoryStatsTest {
         prescribe(older.getId(), "plank", "Plank", 2, 25, "sec");
         prescribe(abandoned.getId(), "plank", "Plank", 4, 40, "sec");
 
-        assertTrue(service.stats(USER).progressions().isEmpty());
+        assertTrue(insights.stats(USER).progressions().isEmpty());
     }
 
     private void prescribe(long sessionId, String key, String name, int sets, int reps, String unit) {

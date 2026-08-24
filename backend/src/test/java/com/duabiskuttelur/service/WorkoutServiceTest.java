@@ -461,7 +461,7 @@ class WorkoutServiceTest {
     void aStreakCountsConsecutiveCompletedDays() {
         LocalDate today = LocalDate.of(2026, 8, 17);
 
-        assertEquals(3, WorkoutService.streak(List.of(
+        assertEquals(3, WorkoutCalendar.streak(List.of(
                 completedOn(today.minusDays(2)), completedOn(today.minusDays(1)), completedOn(today)), today));
     }
 
@@ -470,7 +470,7 @@ class WorkoutServiceTest {
     void aStreakSurvivesTodayNotBeingDoneYet() {
         LocalDate today = LocalDate.of(2026, 8, 17);
 
-        assertEquals(2, WorkoutService.streak(List.of(
+        assertEquals(2, WorkoutCalendar.streak(List.of(
                 completedOn(today.minusDays(2)), completedOn(today.minusDays(1))), today));
     }
 
@@ -478,10 +478,10 @@ class WorkoutServiceTest {
     void aGapBreaksTheStreak() {
         LocalDate today = LocalDate.of(2026, 8, 17);
 
-        assertEquals(1, WorkoutService.streak(List.of(
+        assertEquals(1, WorkoutCalendar.streak(List.of(
                 completedOn(today.minusDays(5)), completedOn(today)), today));
-        assertEquals(0, WorkoutService.streak(List.of(completedOn(today.minusDays(4))), today));
-        assertEquals(0, WorkoutService.streak(List.of(), today));
+        assertEquals(0, WorkoutCalendar.streak(List.of(completedOn(today.minusDays(4))), today));
+        assertEquals(0, WorkoutCalendar.streak(List.of(), today));
     }
 
     /** A planned or skipped day is not a trained day. */
@@ -491,7 +491,7 @@ class WorkoutServiceTest {
         WorkoutSessionEntity skipped = completedOn(today.minusDays(1));
         skipped.setStatus("skipped");
 
-        assertEquals(1, WorkoutService.streak(List.of(skipped, completedOn(today)), today));
+        assertEquals(1, WorkoutCalendar.streak(List.of(skipped, completedOn(today)), today));
     }
 
     private static WorkoutSessionEntity completedOn(LocalDate date) {
