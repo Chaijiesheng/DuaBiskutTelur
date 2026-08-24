@@ -249,7 +249,15 @@ After deploying, verify:
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://<your-domain>/        # 200
 curl -s https://<your-domain>/api/history                              # 401 JSON
+curl -s https://<your-domain>/actuator/health                          # {"status":"UP",...}
 ```
+
+The health URL is the one the uptime workflow watches, and it is the only
+actuator path the container nginx proxies (an exact-match location; everything
+else under `/actuator` still returns 404). It reports `UP` only when the
+database answers too, which is what separates "the VM is gone" from "nginx is
+serving the app shell over a dead backend" -- the second looks entirely normal
+to anyone who loads the page and never taps anything.
 
 **Docker cache gotcha:** frontend rebuilds have been observed reporting every
 layer `CACHED` (including `COPY . .`) despite changed files — pass
@@ -333,8 +341,14 @@ request.
   needed on iOS.
 - **Origin serves plain HTTP**; TLS depends entirely on the fronting proxy
   being configured correctly.
-- **No monitoring/alerting** on the production host; health is checked
-  manually (`docker compose ps` / logs). No actuator endpoints yet.
+- **Uptime monitoring is best-effort only.** `.github/workflows/uptime.yml`
+  probes `/` and `/actuator/health` from GitHub's runners every ten minutes and
+  opens a labelled issue when three consecutive attempts fail. It runs off the
+  VM on purpose -- a monitor on the box cannot report the box being down -- but
+  GitHub coalesces scheduled runs under load, so ten minutes can mean twenty,
+  and schedules switch off after 60 days without a commit. It is a smoke alarm,
+  not a pager: an external monitor on the same two URLs is still worth having.
+  Nothing yet watches 5xx rate, disk, or memory.
 - The Gemini model-fallback path is unit-tested but has not been observed
   end-to-end against a real, live provider outage.
 

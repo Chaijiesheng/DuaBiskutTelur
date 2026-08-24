@@ -50,14 +50,30 @@ class ActuatorExposureTest {
         mockMvc.perform(get("/actuator/health")).andExpect(status().isOk());
     }
 
+    /**
+     * The body is the whole body, not merely free of the word "components".
+     *
+     * <p>This endpoint used to be reachable only from the compose network. It
+     * is now proxied to the public internet, because an uptime check that runs
+     * outside the machine has to have something to ask and nothing on the
+     * machine can report the machine being down. Anything this returns is
+     * therefore world-readable, so the assertion is an exact match: a future
+     * {@code show-details}, a build-info contributor or a health group would
+     * each add a field, and each would fail here rather than quietly appearing
+     * on the internet.
+     *
+     * <p>{@code groups} is the one field beyond the status, and it is there
+     * because {@code management.endpoint.health.probes.enabled} is on. It names
+     * the two probe groups and says nothing about them -- the sub-paths that
+     * would are not proxied. Written into the expectation rather than waved
+     * through by a loose matcher, so that this stays the complete list.
+     */
     @Test
-    void healthNeverNamesTheFailingComponent() throws Exception {
-        // show-details: never. The default, restated in application.yml and
-        // asserted here because the endpoint is permitAll: component details
-        // include the driver, the JDBC URL and the exception message.
+    void healthSaysOnlyWhetherItIsUp() throws Exception {
         mockMvc.perform(get("/actuator/health"))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("components"))));
+                .andExpect(status().isOk())
+                .andExpect(content().json(
+                        "{\"status\":\"UP\",\"groups\":[\"liveness\",\"readiness\"]}", true));
     }
 
     @Test

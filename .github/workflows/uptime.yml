@@ -1,0 +1,154 @@
+name: Uptime
+
+# An outage went unnoticed for days because nothing ever asked whether the site
+# was up. The only thing checking was whoever happened to open it.
+#
+# This runs on GitHub's machines rather than the VM, which is the whole point:
+# a monitor living on the box cannot report the box being down. It is
+# deliberately the cheapest thing that would have caught it -- no new account,
+# no agent, nothing else to keep running. What it is not is at the bottom.
+
+on:
+  schedule:
+    # Every ten minutes. GitHub's scheduler is best-effort and coalesces cron
+    # runs under load, so read this as "usually within ten to twenty minutes"
+    # and never as a guarantee. Also: on a free plan, scheduled workflows are
+    # disabled automatically after 60 days without a commit to the repository.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# One probe at a time. Overlapping runs would race each other opening and
+# closing the same issue.
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+env:
+  SITE: https://duabiskuttelur.dpdns.org
+  LABEL: uptime
+
+jobs:
+  probe:
+    name: Probe the public site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the site whether it is alive
+        id: probe
+        run: |
+          set -uo pipefail
+
+          # Two signals, because they fail differently and the difference is
+          # what makes the alert actionable:
+          #   /                  nginx serving the app shell
+          #   /actuator/health   the backend, and through it the database
+          # nginx up with the backend down is the case that looks perfectly
+          # fine to somebody who loads the home page and never taps anything.
+          probe() {
+            curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$SITE$1" 2>/dev/null || echo 000
+          }
+
+          # Three attempts before calling it an outage. A single blip from
+          # Cloudflare, or a restart mid-deploy, is not worth an alert -- and an
+          # alert that cries wolf gets muted, which puts us back where we
+          # started.
+          for attempt in 1 2 3; do
+            shell_code=$(probe /)
+            api_code=$(probe /actuator/health)
+            echo "attempt $attempt: / -> $shell_code, /actuator/health -> $api_code"
+            if [ "$shell_code" = "200" ] && [ "$api_code" = "200" ]; then
+              up=true
+              break
+            fi
+            up=false
+            if [ "$attempt" -lt 3 ]; then sleep 30; fi
+          done
+
+          if [ "$up" = "true" ]; then
+            diagnosis="Everything answered."
+          elif [ "$shell_code" = "200" ]; then
+            diagnosis="nginx is serving the app but the backend did not answer ($api_code). The site looks fine to anyone who does not tap anything."
+          elif [ "$api_code" = "200" ]; then
+            diagnosis="The backend answered but the app shell did not ($shell_code). Unusual - check the frontend container."
+          else
+            diagnosis="Nothing answered (/ gave $shell_code, /actuator/health gave $api_code). The host is unreachable, or Cloudflare cannot reach the origin - a 522 usually means the VM is down or its public IP changed."
+          fi
+
+          {
+            echo "up=$up"
+            echo "shell_code=$shell_code"
+            echo "api_code=$api_code"
+            echo "diagnosis=$diagnosis"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## $SITE"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| \`/\` (app shell) | \`$shell_code\` |"
+            echo "| \`/actuator/health\` (backend) | \`$api_code\` |"
+            echo ""
+            echo "$diagnosis"
+            echo ""
+            echo "> Best-effort. GitHub coalesces scheduled runs under load, so a ten-minute"
+            echo "> schedule can land twenty minutes late, and a repository with no commits"
+            echo "> for 60 days has its schedules switched off. For alerting you can lean on,"
+            echo "> point an external monitor at these same two URLs as well."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue if it is down
+        if: steps.probe.outputs.up != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIAGNOSIS: ${{ steps.probe.outputs.diagnosis }}
+          SHELL_CODE: ${{ steps.probe.outputs.shell_code }}
+          API_CODE: ${{ steps.probe.outputs.api_code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open_issue=$(gh issue list --label "$LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$open_issue" ]; then
+            echo "Issue #$open_issue is already open; a second one every ten minutes helps nobody."
+            exit 0
+          fi
+          gh label create "$LABEL" --description "Automated uptime checks" --color B60205 2>/dev/null || true
+          {
+            echo "Three consecutive probes failed."
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| \`/\` (app shell) | \`$SHELL_CODE\` |"
+            echo "| \`/actuator/health\` (backend) | \`$API_CODE\` |"
+            echo ""
+            echo "$DIAGNOSIS"
+            echo ""
+            echo "This issue closes itself when the site answers again."
+            echo ""
+            echo "[The run that found it]($RUN_URL)"
+          } > body.md
+          gh issue create --title "$SITE is not responding" --label "$LABEL" --body-file body.md
+
+      - name: Close the issue once it is back
+        if: steps.probe.outputs.up == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open_issue=$(gh issue list --label "$LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$open_issue" ]; then
+            exit 0
+          fi
+          gh issue close "$open_issue" --comment "Back up - both checks answered 200. [Run]($RUN_URL)"
+
+      - name: Fail the run so it shows red
+        if: steps.probe.outputs.up != 'true'
+        env:
+          DIAGNOSIS: ${{ steps.probe.outputs.diagnosis }}
+        run: |
+          echo "::error::$DIAGNOSIS"
+          exit 1
